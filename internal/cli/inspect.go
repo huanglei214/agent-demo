@@ -1,0 +1,18 @@
+package cli
+
+import "github.com/spf13/cobra"
+
+func newInspectCommand(ctx *commandContext) *cobra.Command {
+	return &cobra.Command{
+		Use:   "inspect <run-id>",
+		Short: "Inspect run state and metadata",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			response, err := ctx.services().InspectRun(args[0])
+			if err != nil {
+				return err
+			}
+			return printJSONTo(cmd.OutOrStdout(), response)
+		},
+	}
+}
