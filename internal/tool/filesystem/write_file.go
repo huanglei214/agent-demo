@@ -25,6 +25,10 @@ func (t WriteFileTool) Description() string {
 	return "Write a text file inside the workspace with overwrite protection."
 }
 
+func (t WriteFileTool) AccessMode() tool.AccessMode {
+	return tool.AccessWrite
+}
+
 func (t WriteFileTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
 	_ = ctx
 

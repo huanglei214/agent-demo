@@ -1,0 +1,24 @@
+{
+  "name": "basic-plan",
+  "kind": "single_run",
+  "description": "A simple planning-only run should complete and persist core artifacts.",
+  "provider": "mock",
+  "instruction": "请直接总结当前项目状态，不需要使用工具",
+  "expected_events": [
+    "plan.created",
+    "prompt.built",
+    "context.built",
+    "model.called",
+    "run.completed"
+  ],
+  "expected_artifacts": [
+    "run.json",
+    "state.json",
+    "plan.json",
+    "events.jsonl",
+    "result.json",
+    "memories.json"
+  ],
+  "expected_run_count": 1,
+  "expected_result_contains": "mock response"
+}

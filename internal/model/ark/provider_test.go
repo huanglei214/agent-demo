@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"testing"
@@ -89,6 +90,17 @@ func TestGenerateReturnsErrorOnBadStatus(t *testing.T) {
 		Input:        "hello",
 	}); err == nil {
 		t.Fatal("expected bad status error")
+	} else {
+		var arkErr *Error
+		if !errors.As(err, &arkErr) {
+			t.Fatalf("expected typed ark error, got %T", err)
+		}
+		if arkErr.Kind != ErrorKindHTTPStatus || arkErr.StatusCode != http.StatusBadRequest {
+			t.Fatalf("unexpected ark error: %#v", arkErr)
+		}
+		if arkErr.Retryable() {
+			t.Fatalf("expected 400 error to be non-retryable, got %#v", arkErr)
+		}
 	}
 }
 
@@ -118,6 +130,46 @@ func TestGenerateReturnsErrorWhenChoicesMissing(t *testing.T) {
 		Input:        "hello",
 	}); err == nil {
 		t.Fatal("expected missing choices error")
+	} else {
+		var arkErr *Error
+		if !errors.As(err, &arkErr) {
+			t.Fatalf("expected typed ark error, got %T", err)
+		}
+		if arkErr.Kind != ErrorKindEmptyChoices {
+			t.Fatalf("unexpected ark error: %#v", arkErr)
+		}
+	}
+}
+
+func TestGenerateClassifiesTimeoutErrors(t *testing.T) {
+	t.Parallel()
+
+	provider := New(config.ModelConfig{
+		Ark: config.ArkConfig{
+			APIKey:  "test-key",
+			BaseURL: "https://ark.example.com",
+			ModelID: "ark-test",
+		},
+	})
+	provider.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return nil, context.DeadlineExceeded
+		}),
+	}
+
+	if _, err := provider.Generate(context.Background(), model.Request{
+		SystemPrompt: "system",
+		Input:        "hello",
+	}); err == nil {
+		t.Fatal("expected timeout error")
+	} else {
+		var arkErr *Error
+		if !errors.As(err, &arkErr) {
+			t.Fatalf("expected typed ark error, got %T", err)
+		}
+		if arkErr.Kind != ErrorKindTimeout || !arkErr.Retryable() {
+			t.Fatalf("unexpected ark error: %#v", arkErr)
+		}
 	}
 }
 

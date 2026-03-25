@@ -1,0 +1,159 @@
+# harness-runtime-core
+
+## Purpose
+定义 Harness 平台的核心运行时模型、生命周期、事件契约、文件型工件存储，以及基于 Cobra 的首个 CLI 入口。
+
+## Requirements
+
+### Requirement: 统一的核心领域模型
+系统 MUST 定义并持久化 `Task`、`Run`、`Session` 和 `Event` 四类核心对象，并保持它们之间的引用关系清晰可追踪。
+
+#### Scenario: 创建一次新的运行
+- **WHEN** 用户通过 CLI 发起一个新的 harness 任务
+- **THEN** 系统 MUST 创建一个新的 `Task`
+- **THEN** 系统 MUST 创建一个新的 `Session` 或复用显式指定的 `Session`
+- **THEN** 系统 MUST 创建一个新的 `Run`
+- **THEN** 系统 MUST 记录 `task.created` 事件
+- **THEN** 系统 MUST 记录 `session.created` 事件
+- **THEN** 系统 MUST 为该 `Run` 记录 `run.created` 事件
+
+#### Scenario: 在已有 session 中创建新的运行
+- **WHEN** 用户显式指定一个已有 `session_id` 发起新的输入
+- **THEN** 系统 MUST 复用该 `Session`
+- **THEN** 系统 MUST 创建新的 `Task`
+- **THEN** 系统 MUST 创建新的 `Run`
+- **THEN** 系统 MUST 保持该 `Run` 与原 `Session` 的关联关系
+
+### Requirement: Run 生命周期状态管理
+系统 MUST 管理 `Run` 的生命周期状态，并在状态变化时写入结构化事件。
+
+#### Scenario: Run 成功完成
+- **WHEN** 一次 `Run` 正常结束并产生最终结果
+- **THEN** 系统 MUST 将该 `Run` 标记为 `completed`
+- **THEN** 系统 MUST 持久化最终结果
+- **THEN** 系统 MUST 记录 `run.status_changed` 事件
+- **THEN** 系统 MUST 记录 `run.completed` 事件
+
+#### Scenario: Run 失败结束
+- **WHEN** 一次 `Run` 因模型调用、工具执行或内部错误而无法继续
+- **THEN** 系统 MUST 将该 `Run` 标记为 `failed`
+- **THEN** 系统 MUST 记录失败原因
+- **THEN** 系统 MUST 为失败事件包含结构化失败类别和是否可重试的信息
+- **THEN** 系统 MUST 记录 `run.status_changed` 事件
+- **THEN** 系统 MUST 记录 `run.failed` 事件
+
+### Requirement: 事件优先的执行轨迹
+系统 MUST 将执行过程中的关键行为记录为结构化事件，并以追加方式保存为事件流。
+
+#### Scenario: 工具执行产生事件
+- **WHEN** Agent 调用任意一个工具
+- **THEN** 系统 MUST 在工具执行前记录 `tool.called` 事件
+- **THEN** 系统 MUST 在工具成功后记录 `tool.succeeded` 事件，或在失败后记录 `tool.failed` 事件
+
+### Requirement: 标准运行时事件契约
+系统 MUST 为运行时关键阶段使用固定的标准事件名称，以保证 inspect、replay 和后续入口扩展的一致性。
+
+#### Scenario: 生成结果时记录标准事件
+- **WHEN** 一次 `Run` 生成最终结果
+- **THEN** 系统 MUST 记录 `result.generated` 事件
+- **THEN** 系统 MUST 在结果持久化后记录 `run.completed` 事件
+
+#### Scenario: 记录会话消息事件
+- **WHEN** 一轮对话中产生用户输入和助手回复
+- **THEN** 系统 MUST 在对应 `Run` 的事件流中记录 `user.message` 事件
+- **THEN** 系统 MUST 在对应 `Run` 的事件流中记录 `assistant.message` 事件
+
+### Requirement: 文件型运行时存储
+系统 MUST 为每个 `Run` 创建独立的文件型运行时目录，并保存运行所需的最小可观测工件。
+
+#### Scenario: Run 工件落盘
+- **WHEN** 系统创建一个新的 `Run`
+- **THEN** 系统 MUST 为该 `Run` 创建独立目录
+- **THEN** 系统 MUST 持久化 `run.json`
+- **THEN** 系统 MUST 持久化 `plan.json`
+- **THEN** 系统 MUST 持久化 `events.jsonl`
+- **THEN** 系统 MUST 在运行过程中维护 `state.json`
+- **THEN** 系统 MUST 在运行结束后持久化 `result.json`
+
+### Requirement: Cobra CLI 作为首个入口
+系统 MUST 提供基于 Cobra 的 CLI 入口，用于驱动运行时能力，而 CLI 层 MUST 通过应用层访问核心模块。
+
+#### Scenario: 使用 CLI 启动运行
+- **WHEN** 用户执行 `harness run`
+- **THEN** 系统 MUST 通过应用层创建并启动新的 `Run`
+- **THEN** CLI MUST 输出该次运行的标识信息或结果摘要
+
+#### Scenario: 使用 CLI 查看运行
+- **WHEN** 用户执行 `harness inspect <run-id>`
+- **THEN** 系统 MUST 读取并展示指定 `Run` 的当前状态、计划摘要或最终结果
+
+#### Scenario: 使用 chat 命令进行多轮对话
+- **WHEN** 用户执行 `harness chat`
+- **THEN** 系统 MUST 进入交互式多轮对话模式
+- **THEN** 系统 MUST 在会话结束前持续复用同一个 `Session`
+
+### Requirement: 事件回放与恢复能力
+系统 MUST 支持基于持久化工件进行事件回放和运行恢复。
+
+#### Scenario: 回放运行轨迹
+- **WHEN** 用户执行 `harness replay <run-id>`
+- **THEN** 系统 MUST 仅读取对应 `Run` 的 `events.jsonl`
+- **THEN** 系统 MUST 按事件顺序输出执行轨迹
+
+#### Scenario: 查看原始事件流
+- **WHEN** 用户执行 `harness debug events <run-id>`
+- **THEN** 系统 MUST 返回原始事件记录
+- **THEN** 系统 MUST 不将原始事件替换为摘要文案
+
+#### Scenario: 查看运行摘要时间线
+- **WHEN** 用户执行 `harness replay <run-id>`
+- **THEN** 系统 MUST 返回按事件顺序组织的摘要时间线
+- **THEN** 系统 MUST 保留阶段信息，帮助定位计划、模型、工具和子运行行为
+
+#### Scenario: 恢复未完成运行
+- **WHEN** 用户执行 `harness resume <run-id>` 且目标 `Run` 尚未完成
+- **THEN** 系统 MUST 从该 `Run` 的 `run.json`、`state.json` 和 `plan.json` 恢复上下文
+- **THEN** 系统 MUST 继续执行该 `Run`
+
+#### Scenario: 恢复工具后续阶段
+- **WHEN** 某个 `Run` 已经成功执行工具并持久化了工具结果，但在生成最终答案前中断
+- **THEN** 系统 MUST 基于 `state.json` 中的续跑状态恢复执行
+- **THEN** 系统 MUST 不重复执行已经成功的工具调用
+
+#### Scenario: 拒绝恢复不可自动恢复的运行
+- **WHEN** 用户执行 `harness resume <run-id>` 且目标 `Run` 已处于 `blocked`、终态或已经存在持久化结果
+- **THEN** 系统 MUST 拒绝自动恢复
+- **THEN** 系统 MUST 返回清晰说明，指出该 `Run` 需要人工处理或已经结束
+
+### Requirement: 本地 HTTP API 入口
+系统 MUST 提供一个面向本机开发的 HTTP API 入口，用于复用现有应用层服务，而不改变核心运行时模型。
+
+#### Scenario: 启动本地 API 服务
+- **WHEN** 用户执行本地 server 启动命令
+- **THEN** 系统 MUST 启动一个基于 `chi` 的 HTTP 服务
+- **THEN** 该服务 MUST 复用应用层 `Services`，而不是重新实现运行时逻辑
+
+### Requirement: 运行时 HTTP 查询接口
+系统 MUST 通过 HTTP API 暴露当前前端所需的运行时查询能力。
+
+#### Scenario: 查询 run 详情
+- **WHEN** 客户端请求某个 `Run` 的详情
+- **THEN** 系统 MUST 返回 run、plan、state、result、current step 和 child run 摘要
+
+#### Scenario: 查询摘要时间线和原始事件
+- **WHEN** 客户端请求某个 `Run` 的 replay 或 events 数据
+- **THEN** 系统 MUST 提供摘要时间线接口
+- **THEN** 系统 MUST 提供原始事件接口
+
+### Requirement: 运行时 HTTP 操作接口
+系统 MUST 通过 HTTP API 暴露创建 run、恢复 run 和创建 session 的能力。
+
+#### Scenario: 通过 HTTP 发起新的 run
+- **WHEN** 客户端通过 HTTP 提交运行请求
+- **THEN** 系统 MUST 创建并执行新的 `Run`
+- **THEN** 系统 MUST 返回该次运行的结构化响应
+
+#### Scenario: 通过 HTTP 恢复运行
+- **WHEN** 客户端请求恢复某个未完成 `Run`
+- **THEN** 系统 MUST 复用现有恢复逻辑
+- **THEN** 系统 MUST 返回结构化恢复结果或清晰错误

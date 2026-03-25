@@ -1,0 +1,29 @@
+{
+  "name": "multi-turn-session",
+  "kind": "multi_turn_session",
+  "description": "Two turns in the same session should persist message history and complete both runs.",
+  "provider": "mock",
+  "turns": [
+    "你好",
+    "继续聊，补充上一轮内容"
+  ],
+  "expected_events": [
+    "user.message",
+    "assistant.message",
+    "run.completed"
+  ],
+  "expected_artifacts": [
+    "run.json",
+    "state.json",
+    "plan.json",
+    "events.jsonl",
+    "result.json",
+    "memories.json"
+  ],
+  "expected_session_artifacts": [
+    "messages.jsonl"
+  ],
+  "expected_message_count": 4,
+  "expected_run_count": 2,
+  "expected_result_contains": "mock response"
+}

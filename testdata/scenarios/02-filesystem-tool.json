@@ -1,0 +1,30 @@
+{
+  "name": "filesystem-tool",
+  "kind": "single_run",
+  "description": "A README-focused request should exercise the filesystem tool path.",
+  "provider": "mock",
+  "instruction": "请读取 README.md 并总结当前项目状态",
+  "setup_files": [
+    {
+      "path": "README.md",
+      "content": "# Demo\nThis is a scenario fixture.\n"
+    }
+  ],
+  "expected_events": [
+    "tool.called",
+    "tool.succeeded",
+    "model.called",
+    "model.responded",
+    "run.completed"
+  ],
+  "expected_artifacts": [
+    "run.json",
+    "state.json",
+    "plan.json",
+    "events.jsonl",
+    "result.json",
+    "memories.json"
+  ],
+  "expected_run_count": 1,
+  "expected_result_contains": "summarized"
+}

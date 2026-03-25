@@ -25,6 +25,10 @@ func (t StatTool) Description() string {
 	return "Inspect file or directory metadata inside the workspace."
 }
 
+func (t StatTool) AccessMode() tool.AccessMode {
+	return tool.AccessReadOnly
+}
+
 func (t StatTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
 	_ = ctx
 

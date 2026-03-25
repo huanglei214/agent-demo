@@ -39,8 +39,10 @@ func NewRootCommand() (*cobra.Command, error) {
 	rootCmd.AddCommand(
 		newRunCommand(&ctx),
 		newChatCommand(&ctx),
+		newServeCommand(&ctx),
 		newInspectCommand(&ctx),
 		newReplayCommand(&ctx),
+		newSessionCommand(&ctx),
 		newResumeCommand(&ctx),
 		newToolsCommand(&ctx),
 		newDebugCommand(&ctx),

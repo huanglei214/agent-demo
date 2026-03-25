@@ -26,3 +26,16 @@ func (r *Registry) List() []Tool {
 	}
 	return result
 }
+
+func (r *Registry) Descriptors() []Descriptor {
+	tools := r.List()
+	result := make([]Descriptor, 0, len(tools))
+	for _, item := range tools {
+		result = append(result, Descriptor{
+			Name:        item.Name(),
+			Description: item.Description(),
+			Access:      item.AccessMode(),
+		})
+	}
+	return result
+}

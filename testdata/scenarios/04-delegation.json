@@ -1,0 +1,29 @@
+{
+  "name": "delegation",
+  "kind": "single_run",
+  "description": "A delegation request should create one child run and persist the child record.",
+  "provider": "mock",
+  "instruction": "请委派一个子任务来分析这个仓库，然后给我总结",
+  "setup_files": [
+    {
+      "path": "README.md",
+      "content": "# Delegation Fixture\n"
+    }
+  ],
+  "expected_events": [
+    "subagent.spawned",
+    "subagent.completed",
+    "run.completed"
+  ],
+  "expected_artifacts": [
+    "run.json",
+    "state.json",
+    "plan.json",
+    "events.jsonl",
+    "result.json",
+    "memories.json"
+  ],
+  "expected_run_count": 1,
+  "expected_children": 1,
+  "expected_result_contains": "summarized"
+}

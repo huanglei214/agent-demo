@@ -19,6 +19,8 @@ type Policy struct {
 	AllowedTools []string
 }
 
+type Option func(*Policy)
+
 type Manager struct {
 	paths  store.Paths
 	policy Policy
@@ -31,14 +33,26 @@ type ChildRecord struct {
 	UpdatedAt time.Time                       `json:"updated_at"`
 }
 
-func NewManager(paths store.Paths) Manager {
+func NewManager(paths store.Paths, options ...Option) Manager {
+	policy := Policy{
+		MaxDepth:     2,
+		MaxChildren:  2,
+		AllowedTools: []string{"fs.read_file", "fs.list_dir", "fs.search", "fs.stat"},
+	}
+	for _, option := range options {
+		option(&policy)
+	}
+
 	return Manager{
-		paths: paths,
-		policy: Policy{
-			MaxDepth:     2,
-			MaxChildren:  2,
-			AllowedTools: []string{"fs.read_file", "fs.list_dir", "fs.search", "fs.stat"},
-		},
+		paths:  paths,
+		policy: policy,
+	}
+}
+
+func WithAllowedTools(names []string) Option {
+	copied := append([]string{}, names...)
+	return func(policy *Policy) {
+		policy.AllowedTools = copied
 	}
 }
 

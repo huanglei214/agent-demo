@@ -5,7 +5,7 @@ import "github.com/spf13/cobra"
 func newInspectCommand(ctx *commandContext) *cobra.Command {
 	return &cobra.Command{
 		Use:   "inspect <run-id>",
-		Short: "Inspect run state and metadata",
+		Short: "Inspect run state, current step, failures, and child summaries",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			response, err := ctx.services().InspectRun(args[0])

@@ -26,6 +26,10 @@ func (t SearchTool) Description() string {
 	return "Search file paths or file contents inside the workspace."
 }
 
+func (t SearchTool) AccessMode() tool.AccessMode {
+	return tool.AccessReadOnly
+}
+
 func (t SearchTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
 	_ = ctx
 

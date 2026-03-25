@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/huanglei214/agent-demo/internal/tool"
 )
 
 func TestReadFileToolSuccess(t *testing.T) {
@@ -160,6 +162,28 @@ func TestWriteFileToolRejectsOverwriteWithoutFlag(t *testing.T) {
 	}))
 	if !os.IsExist(err) {
 		t.Fatalf("expected os.ErrExist, got %v", err)
+	}
+}
+
+func TestFileSystemToolAccessModes(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+
+	if got := NewReadFileTool(workspace).AccessMode(); got != tool.AccessReadOnly {
+		t.Fatalf("expected read tool to be read_only, got %s", got)
+	}
+	if got := NewListDirTool(workspace).AccessMode(); got != tool.AccessReadOnly {
+		t.Fatalf("expected list tool to be read_only, got %s", got)
+	}
+	if got := NewSearchTool(workspace).AccessMode(); got != tool.AccessReadOnly {
+		t.Fatalf("expected search tool to be read_only, got %s", got)
+	}
+	if got := NewStatTool(workspace).AccessMode(); got != tool.AccessReadOnly {
+		t.Fatalf("expected stat tool to be read_only, got %s", got)
+	}
+	if got := NewWriteFileTool(workspace).AccessMode(); got != tool.AccessWrite {
+		t.Fatalf("expected write tool to be write, got %s", got)
 	}
 }
 

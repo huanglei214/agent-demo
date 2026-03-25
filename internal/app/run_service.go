@@ -12,6 +12,7 @@ import (
 	"github.com/huanglei214/agent-demo/internal/delegation"
 	"github.com/huanglei214/agent-demo/internal/memory"
 	"github.com/huanglei214/agent-demo/internal/model"
+	arkmodel "github.com/huanglei214/agent-demo/internal/model/ark"
 	"github.com/huanglei214/agent-demo/internal/planner"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
 )
@@ -164,6 +165,7 @@ func (s Services) promptToolMetadata() []map[string]string {
 		result = append(result, map[string]string{
 			"name":        item.Name,
 			"description": item.Description,
+			"access":      string(item.Access),
 		})
 	}
 	return result
@@ -297,14 +299,53 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 
 	provider, err := s.ModelFactory()
 	if err != nil {
-		return s.failRun(run, task.ID, session.ID, state, err, sequence+1)
+		return s.failRun(run, plan, task.ID, session.ID, state, err, sequence+1)
 	}
 
 	finalAnswer := ""
 	turnCount := state.TurnCount
 	action := model.Action{Action: "final", Answer: explicitMemoryAnswer}
 
-	if routedToMemory {
+	if !activate && state.ResumePhase == "post_tool" && state.PendingToolName != "" && len(state.PendingToolResult) > 0 {
+		followUpPrompt := s.PromptBuilder.BuildFollowUpPrompt(task, state.PendingToolName, state.PendingToolResult, summaries)
+		if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "model.called", "runtime", map[string]any{
+			"provider": run.Provider,
+			"model":    run.Model,
+			"phase":    "post_tool_resume",
+			"tool":     state.PendingToolName,
+		})); err != nil {
+			return RunResponse{}, err
+		}
+
+		followUpResponse, err := provider.Generate(ctx, model.Request{
+			SystemPrompt: followUpPrompt.System,
+			Input:        followUpPrompt.Input,
+			Metadata:     followUpPrompt.Metadata,
+		})
+		if err != nil {
+			return s.failRun(run, plan, task.ID, session.ID, state, err, sequence+2)
+		}
+
+		if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+2, "model.responded", "model", map[string]any{
+			"finish_reason": followUpResponse.FinishReason,
+			"phase":         "post_tool_resume",
+		})); err != nil {
+			return RunResponse{}, err
+		}
+
+		followUpAction := parseAction(followUpResponse.Text)
+		if followUpAction.Action != "final" || strings.TrimSpace(followUpAction.Answer) == "" {
+			return s.failRun(run, plan, task.ID, session.ID, state, errors.New("resumed post-tool model response did not produce a final answer"), sequence+3)
+		}
+
+		finalAnswer = followUpAction.Answer
+		turnCount = state.TurnCount + 1
+		state.ResumePhase = ""
+		state.PendingToolName = ""
+		state.PendingToolResult = nil
+		state.UpdatedAt = time.Now()
+		sequence += 2
+	} else if routedToMemory {
 		if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "memory.routed", "memory", map[string]any{
 			"count": len(explicitMemoryCandidates),
 		})); err != nil {
@@ -326,7 +367,7 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 			Metadata:     runPrompt.Metadata,
 		})
 		if err != nil {
-			return s.failRun(run, task.ID, session.ID, state, err, sequence+1)
+			return s.failRun(run, plan, task.ID, session.ID, state, err, sequence+1)
 		}
 
 		if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+2, "model.responded", "model", map[string]any{
@@ -350,7 +391,7 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 			})); err != nil {
 				return RunResponse{}, err
 			}
-			return s.failRun(run, task.ID, session.ID, state, errors.New("delegation rejected: "+reason), sequence+2)
+			return s.failRun(run, plan, task.ID, session.ID, state, errors.New("delegation rejected: "+reason), sequence+2)
 		}
 
 		delegationGoal := strings.TrimSpace(action.DelegationGoal)
@@ -360,7 +401,7 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 		delegationTask := s.DelegationManager.BuildTask(run, plan, *currentStep, delegationGoal, recalledMemories, summaries)
 		childResponse, childResult, err := s.spawnChildRun(task, session, run, delegationTask)
 		if err != nil {
-			return s.failRun(run, task.ID, session.ID, state, err, sequence+1)
+			return s.failRun(run, plan, task.ID, session.ID, state, err, sequence+1)
 		}
 
 		if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "subagent.spawned", "delegation", map[string]any{
@@ -379,12 +420,13 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 		}
 		sequence += 2
 
-		if childResult.NeedsReplan {
+		replanDecision := decideChildReplan(childResult)
+		if replanDecision.ShouldReplan {
 			replanned, err := s.Planner.Replan(ctx, planner.ReplanInput{
 				RunID:    run.ID,
 				Goal:     task.Instruction,
 				Previous: plan,
-				Reason:   "child_result_requested_replan",
+				Reason:   replanDecision.Reason,
 			})
 			if err != nil {
 				return RunResponse{}, err
@@ -403,7 +445,7 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 			if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "plan.updated", "planner", map[string]any{
 				"plan_id": plan.ID,
 				"version": plan.Version,
-				"reason":  "child_result_requested_replan",
+				"reason":  replanDecision.Reason,
 				"step_id": currentStep.ID,
 			})); err != nil {
 				return RunResponse{}, err
@@ -427,7 +469,7 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 			Metadata:     followUpPrompt.Metadata,
 		})
 		if err != nil {
-			return s.failRun(run, task.ID, session.ID, state, err, sequence+2)
+			return s.failRun(run, plan, task.ID, session.ID, state, err, sequence+2)
 		}
 		if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+2, "model.responded", "model", map[string]any{
 			"finish_reason": followUpResponse.FinishReason,
@@ -438,7 +480,7 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 
 		followUpAction := parseAction(followUpResponse.Text)
 		if followUpAction.Action != "final" || strings.TrimSpace(followUpAction.Answer) == "" {
-			return s.failRun(run, task.ID, session.ID, state, errors.New("post-delegation model response did not produce a final answer"), sequence+3)
+			return s.failRun(run, plan, task.ID, session.ID, state, errors.New("post-delegation model response did not produce a final answer"), sequence+3)
 		}
 
 		finalAnswer = followUpAction.Answer
@@ -448,7 +490,7 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 
 	if action.Action == "tool" {
 		if action.Tool == "" {
-			return s.failRun(run, task.ID, session.ID, state, errors.New("model requested tool execution without tool name"), sequence+1)
+			return s.failRun(run, plan, task.ID, session.ID, state, errors.New("model requested tool execution without tool name"), sequence+1)
 		}
 		if action.Tool == "fs.write_file" && len(explicitMemoryCandidates) > 0 {
 			if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "memory.routed", "memory", map[string]any{
@@ -472,7 +514,7 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 				})); appendErr != nil {
 					return RunResponse{}, appendErr
 				}
-				return s.failRun(run, task.ID, session.ID, state, err, sequence+2)
+				return s.failRun(run, plan, task.ID, session.ID, state, err, sequence+2)
 			}
 
 			if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "tool.called", "runtime", map[string]any{
@@ -490,7 +532,7 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 				})); err != nil {
 					return RunResponse{}, err
 				}
-				return s.failRun(run, task.ID, session.ID, state, err, sequence+3)
+				return s.failRun(run, plan, task.ID, session.ID, state, err, sequence+3)
 			}
 
 			if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+2, "tool.succeeded", "tool", map[string]any{
@@ -549,6 +591,14 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 				sequence++
 			}
 
+			state.ResumePhase = "post_tool"
+			state.PendingToolName = action.Tool
+			state.PendingToolResult = toolResult.Content
+			state.UpdatedAt = time.Now()
+			if err := s.StateStore.SaveState(state); err != nil {
+				return RunResponse{}, err
+			}
+
 			followUpPrompt := s.PromptBuilder.BuildFollowUpPrompt(task, action.Tool, toolResult.Content, summaries)
 			if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "model.called", "runtime", map[string]any{
 				"provider": run.Provider,
@@ -565,7 +615,7 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 				Metadata:     followUpPrompt.Metadata,
 			})
 			if err != nil {
-				return s.failRun(run, task.ID, session.ID, state, err, sequence+2)
+				return s.failRun(run, plan, task.ID, session.ID, state, err, sequence+2)
 			}
 
 			if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+2, "model.responded", "model", map[string]any{
@@ -577,17 +627,21 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 
 			followUpAction := parseAction(followUpResponse.Text)
 			if followUpAction.Action != "final" || strings.TrimSpace(followUpAction.Answer) == "" {
-				return s.failRun(run, task.ID, session.ID, state, errors.New("post-tool model response did not produce a final answer"), sequence+3)
+				return s.failRun(run, plan, task.ID, session.ID, state, errors.New("post-tool model response did not produce a final answer"), sequence+3)
 			}
 
 			finalAnswer = followUpAction.Answer
+			state.ResumePhase = ""
+			state.PendingToolName = ""
+			state.PendingToolResult = nil
+			state.UpdatedAt = time.Now()
 			sequence += 2
 			turnCount++
 		}
 	}
 
 	if strings.TrimSpace(finalAnswer) == "" {
-		return s.failRun(run, task.ID, session.ID, state, errors.New("model returned an empty final answer"), sequence+1)
+		return s.failRun(run, plan, task.ID, session.ID, state, errors.New("model returned an empty final answer"), sequence+1)
 	}
 
 	result := harnessruntime.RunResult{
@@ -710,12 +764,24 @@ func (s Services) newEvent(run harnessruntime.Run, taskID, sessionID string, seq
 	}
 }
 
-func (s Services) failRun(run harnessruntime.Run, taskID, sessionID string, state harnessruntime.RunState, cause error, sequence int64) (RunResponse, error) {
+func (s Services) failRun(run harnessruntime.Run, plan harnessruntime.Plan, taskID, sessionID string, state harnessruntime.RunState, cause error, sequence int64) (RunResponse, error) {
 	now := time.Now()
+	previousStatus := run.Status
 	run.Status = harnessruntime.RunFailed
 	run.UpdatedAt = now
 	run.CompletedAt = now
 	state.UpdatedAt = now
+	planUpdated := false
+	for i := range plan.Steps {
+		if plan.Steps[i].ID == state.CurrentStepID || (state.CurrentStepID == "" && plan.Steps[i].ID == run.CurrentStepID) {
+			plan.Steps[i].Status = harnessruntime.StepFailed
+			planUpdated = true
+			break
+		}
+	}
+	if planUpdated {
+		plan.UpdatedAt = now
+	}
 
 	if err := s.StateStore.SaveRun(run); err != nil {
 		return RunResponse{}, err
@@ -723,10 +789,25 @@ func (s Services) failRun(run harnessruntime.Run, taskID, sessionID string, stat
 	if err := s.StateStore.SaveState(state); err != nil {
 		return RunResponse{}, err
 	}
+	if planUpdated {
+		if err := s.StateStore.SavePlan(plan); err != nil {
+			return RunResponse{}, err
+		}
+	}
+
+	failureKind, retryable := classifyRunFailure(cause)
 
 	events := []harnessruntime.Event{
-		s.newEvent(run, taskID, sessionID, sequence, "run.status_changed", "runtime", map[string]any{"to": harnessruntime.RunFailed}),
-		s.newEvent(run, taskID, sessionID, sequence+1, "run.failed", "runtime", map[string]any{"error": cause.Error()}),
+		s.newEvent(run, taskID, sessionID, sequence, "run.status_changed", "runtime", map[string]any{
+			"from": previousStatus,
+			"to":   harnessruntime.RunFailed,
+		}),
+		s.newEvent(run, taskID, sessionID, sequence+1, "run.failed", "runtime", map[string]any{
+			"error":        cause.Error(),
+			"failure_kind": failureKind,
+			"retryable":    retryable,
+			"step_id":      state.CurrentStepID,
+		}),
 	}
 	for _, event := range events {
 		if err := s.EventStore.Append(event); err != nil {
@@ -735,6 +816,24 @@ func (s Services) failRun(run harnessruntime.Run, taskID, sessionID string, stat
 	}
 
 	return RunResponse{}, cause
+}
+
+func classifyRunFailure(cause error) (string, bool) {
+	var arkErr *arkmodel.Error
+	if errors.As(cause, &arkErr) {
+		return arkErr.FailureKind(), arkErr.Retryable()
+	}
+	var unsupportedErr *unsupportedProviderError
+	switch {
+	case errors.Is(cause, context.DeadlineExceeded):
+		return "timeout", true
+	case errors.Is(cause, context.Canceled):
+		return "canceled", true
+	case errors.As(cause, &unsupportedErr):
+		return "unsupported_provider", false
+	default:
+		return "runtime_error", false
+	}
 }
 
 func toolBytes(content map[string]any) int {

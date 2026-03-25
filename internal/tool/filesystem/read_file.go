@@ -25,6 +25,10 @@ func (t ReadFileTool) Description() string {
 	return "Read a UTF-8 text file inside the workspace."
 }
 
+func (t ReadFileTool) AccessMode() tool.AccessMode {
+	return tool.AccessReadOnly
+}
+
 func (t ReadFileTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
 	_ = ctx
 

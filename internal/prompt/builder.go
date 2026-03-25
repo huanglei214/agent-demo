@@ -97,6 +97,10 @@ func renderToolingLayer(tools []map[string]string) string {
 Available tools:`,
 	}
 	for _, tool := range tools {
+		if access := strings.TrimSpace(tool["access"]); access != "" {
+			lines = append(lines, fmt.Sprintf("- %s (%s): %s", tool["name"], access, tool["description"]))
+			continue
+		}
 		lines = append(lines, fmt.Sprintf("- %s: %s", tool["name"], tool["description"]))
 	}
 	return strings.Join(lines, "\n")

@@ -173,11 +173,14 @@ type DelegationResult struct {
 }
 
 type RunState struct {
-	RunID         string    `json:"run_id"`
-	CurrentStepID string    `json:"current_step_id,omitempty"`
-	TurnCount     int       `json:"turn_count"`
-	LastEventID   string    `json:"last_event_id,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	RunID             string         `json:"run_id"`
+	CurrentStepID     string         `json:"current_step_id,omitempty"`
+	TurnCount         int            `json:"turn_count"`
+	LastEventID       string         `json:"last_event_id,omitempty"`
+	ResumePhase       string         `json:"resume_phase,omitempty"`
+	PendingToolName   string         `json:"pending_tool_name,omitempty"`
+	PendingToolResult map[string]any `json:"pending_tool_result,omitempty"`
+	UpdatedAt         time.Time      `json:"updated_at"`
 }
 
 type RunResult struct {

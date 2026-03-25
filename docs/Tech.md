@@ -4,9 +4,15 @@
 
 依据文档：
 - `PRD.md`
-- `openspec/changes/bootstrap-agent-harness/proposal.md`
-- `openspec/changes/bootstrap-agent-harness/design.md`
-- `openspec/changes/bootstrap-agent-harness/tasks.md`
+- `openspec/changes/archive/2026-03-25-bootstrap-agent-harness/proposal.md`
+- `openspec/changes/archive/2026-03-25-bootstrap-agent-harness/design.md`
+- `openspec/changes/archive/2026-03-25-bootstrap-agent-harness/tasks.md`
+- `openspec/changes/archive/2026-03-25-support-multi-turn-chat/proposal.md`
+- `openspec/changes/archive/2026-03-25-support-multi-turn-chat/design.md`
+- `openspec/changes/archive/2026-03-25-support-multi-turn-chat/tasks.md`
+- `openspec/changes/stabilize-harness-runtime/proposal.md`
+- `openspec/changes/stabilize-harness-runtime/design.md`
+- `openspec/changes/stabilize-harness-runtime/tasks.md`
 
 ## 1. 文档目标
 
@@ -15,25 +21,28 @@
 - 系统应该如何分层和拆模块
 - 运行时核心对象应该长什么样
 - 规划、上下文、工具、记忆、子代理如何协同
-- 这个空仓库应该按什么顺序演进到可运行 MVP
+- 当前 MVP 已经实现到哪一步，以及下一步应如何继续演进
 
 当前仓库现状：
 
-- 仓库仍处于 greenfield 阶段
-- 还没有 Go 模块和运行时代码
-- 当前最稳定的输入是 PRD 和 OpenSpec 设计稿
+- 仓库已经完成单机本地运行的 Harness MVP
+- 已有 Go 模块、Cobra CLI、文件型运行工件、Ark / Mock provider 和最小 plan-driven loop
+- 已支持多轮 chat、session message 持久化、受控 delegation、`inspect / replay / resume / debug events`
+- 已新增固定场景回归入口 `make verify-scenarios`
+- 当前文档目标更偏“实现快照 + 演进说明”，而不是 greenfield 设计草案
 
-因此，本方案会刻意把目录、对象、事件、文件结构写得更明确，目的是减少实现阶段的重复设计。
+因此，本方案会刻意把目录、对象、事件、文件结构和当前 CLI 能力写得更明确，目的是减少后续迭代时的重复设计和文档漂移。
 
 ## 2. 目标与约束
 
 ### 2.1 目标
 
 - 使用 Go 构建单机本地运行的 Agent Harness 平台
-- 支持 `run`、`inspect`、`replay`、`resume`、`tools list`、`debug events`
+- 支持 `run`、`chat`、`inspect`、`session inspect`、`replay`、`resume`、`tools list`、`debug events`
 - 将运行工件统一持久化到 `.runtime/runs/<run-id>/`
 - 实现 plan-driven agent loop，串联 planning、context、compaction、memory、tool、delegation
 - 同时支持真实 `Ark provider` 和可测试的 `mock provider`
+- 提供统一的固定场景回归入口，覆盖基础规划、文件系统工具、多轮 chat 和 delegation
 - 为未来的 HTTP、skills、MCP、ACP、消息入口、调度入口保留清晰边界
 
 ### 2.2 非目标
@@ -103,11 +112,15 @@ flowchart TD
 │   │   ├── inspect_service.go
 │   │   ├── replay_service.go
 │   │   ├── resume_service.go
+│   │   ├── session_service.go
+│   │   ├── scenario_regression_test.go
 │   │   └── tools_service.go
 │   ├── cli/
 │   │   ├── root.go
 │   │   ├── run.go
+│   │   ├── chat.go
 │   │   ├── inspect.go
+│   │   ├── session.go
 │   │   ├── replay.go
 │   │   ├── resume.go
 │   │   ├── tools.go
@@ -119,16 +132,9 @@ flowchart TD
 │   │   ├── budget.go
 │   │   └── compaction.go
 │   ├── delegation/
-│   │   ├── manager.go
-│   │   ├── policy.go
-│   │   └── result.go
-│   ├── loop/
-│   │   ├── runner.go
-│   │   ├── state_machine.go
-│   │   └── turn.go
+│   │   └── manager.go
 │   ├── memory/
 │   │   ├── manager.go
-│   │   ├── recall.go
 │   │   └── store.go
 │   ├── model/
 │   │   ├── model.go
@@ -137,28 +143,16 @@ flowchart TD
 │   │   └── mock/
 │   │       └── provider.go
 │   ├── planner/
-│   │   ├── planner.go
-│   │   └── default_planner.go
+│   │   └── planner.go
 │   ├── prompt/
 │   │   ├── builder.go
-│   │   └── templates/
-│   │       ├── base.tmpl
-│   │       ├── role.default-agent.tmpl
-│   │       ├── task.run.tmpl
-│   │       └── tooling.fs.tmpl
+│   │   └── templates.go
 │   ├── runtime/
-│   │   ├── types.go
-│   │   ├── run.go
-│   │   ├── session.go
-│   │   ├── task.go
-│   │   ├── event.go
-│   │   ├── plan.go
-│   │   └── result.go
+│   │   └── types.go
 │   ├── store/
 │   │   ├── filesystem/
 │   │   │   ├── event_store.go
 │   │   │   ├── state_store.go
-│   │   │   └── memory_store.go
 │   │   └── paths.go
 │   └── tool/
 │       ├── registry.go
@@ -171,11 +165,13 @@ flowchart TD
 │           ├── search.go
 │           └── stat.go
 ├── testdata/
-│   ├── scenarios/
-│   └── golden/
+│   └── scenarios/
 ├── .runtime/
-├── PRD.md
-├── TECHNICAL_SOLUTION.md
+├── docs/
+│   └── step1/
+│       ├── PRD.md
+│       └── TECHNICAL_SOLUTION.md
+├── openspec/
 └── README.md
 ```
 
@@ -183,7 +179,7 @@ flowchart TD
 
 - `internal/app` 负责用例，后续 HTTP 或消息入口可直接复用
 - `internal/runtime` 放稳定领域对象，避免被入口层带偏
-- `internal/loop` 单独承接状态机和主执行链
+- 当前主执行链集中在 `run_service.go`，后续如果 loop 复杂度继续上升，再独立拆分 `loop/` 目录
 - `internal/store/filesystem` 隔离文件型存储，后续替换 SQLite/Postgres 成本更低
 - 各能力模块可单测、可替换、可逐步演进
 
@@ -334,24 +330,34 @@ type PlanStep struct {
         ├── result.json
         └── children/
             └── <child-run-id>.json
+
+.runtime/
+└── sessions/
+    └── <session-id>/
+        ├── session.json
+        ├── messages.jsonl
+        └── input.history
 ```
 
 ### 6.2 文件职责
 
 - `run.json`：Run 元信息和生命周期状态
 - `state.json`：resume 所需的中间状态
+- `state.json` 中当前还会保存 `resume_phase`、`pending_tool_name`、`pending_tool_result` 等续跑状态
 - `plan.json`：当前结构化计划
 - `summaries.json`：compaction 的 step summary 和 run summary
 - `memories.json`：本次 run 的 recall 结果和 memory candidate
 - `events.jsonl`：按顺序追加的完整事件流
 - `result.json`：最终输出结果
+- `sessions/<session-id>/messages.jsonl`：多轮 user / assistant 消息历史
+- `sessions/<session-id>/input.history`：TTY chat 的输入历史
 
 ### 6.3 持久化原则
 
 - Event 必须 append-only，并且关键动作后立即 flush
 - State 可以覆盖写，但必须只在安全 checkpoint 写入
-- `resume` 基于 `run.json + state.json + plan.json`
-- `replay` 只依赖 `events.jsonl`，不依赖推导状态
+- `resume` 基于 `run.json + state.json + plan.json`，并支持 `post_tool` 阶段恢复
+- `replay` 的摘要视图依赖 `events.jsonl` 生成；`debug events` 保留原始事件输出
 
 ## 7. 事件模型
 
@@ -373,7 +379,9 @@ type PlanStep struct {
 - `context.compacted`
 - `memory.recalled`
 - `memory.candidate_extracted`
-- `memory.written`
+- `memory.committed`
+- `user.message`
+- `assistant.message`
 - `model.called`
 - `model.responded`
 - `tool.called`
@@ -490,11 +498,14 @@ sequenceDiagram
 
 ```text
 harness run <instruction>
+harness chat
 harness inspect <run-id>
+harness session inspect <session-id>
 harness replay <run-id>
 harness resume <run-id>
 harness tools list
 harness debug events <run-id>
+make verify-scenarios
 ```
 
 ### 9.2 CLI 职责边界
@@ -520,14 +531,21 @@ CLI 不负责：
 - `--provider`
 - `--model`
 - `--max-turns`
-- `--resume-if-exists`
-- `--json`
+- `--session`
+
+`chat`：
+
+- `--session`
+- `--max-turns`
+
+`session inspect`：
+
+- `--recent`
 
 `replay`：
 
-- `--from-seq`
-- `--to-seq`
-- `--json`
+- 当前更适合输出“摘要时间线”
+- 原始事件排障应使用 `debug events`
 
 ## 10. Model Provider 设计
 

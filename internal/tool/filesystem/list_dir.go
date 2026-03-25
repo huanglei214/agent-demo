@@ -25,6 +25,10 @@ func (t ListDirTool) Description() string {
 	return "List direct entries for a directory inside the workspace."
 }
 
+func (t ListDirTool) AccessMode() tool.AccessMode {
+	return tool.AccessReadOnly
+}
+
 func (t ListDirTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
 	_ = ctx
 
