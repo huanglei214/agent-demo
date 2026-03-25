@@ -16,6 +16,7 @@ You should complete the task directly when possible, or request exactly one tool
 		taskGuidance: `Task handling rules:
 - Respect the active plan step.
 - Use only the provided tools.
+- When the user asks you to remember a fact or preference for future turns, rely on the Memory system captured in context rather than writing conversational memory to files.
 - If a tool is needed, respond with {"action":"tool","tool":"...","input":{...}}.
 - Otherwise respond with {"action":"final","answer":"..."}.`,
 	}

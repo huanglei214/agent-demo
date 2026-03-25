@@ -26,6 +26,12 @@ type ExtractInput struct {
 	Model     string
 }
 
+type ExplicitRememberInput struct {
+	SessionID   string
+	RunID       string
+	Instruction string
+}
+
 type Manager struct {
 	store FileStore
 }
@@ -88,6 +94,65 @@ func (m Manager) Commit(entries []harnessruntime.MemoryEntry) error {
 		existing = append(existing, entry)
 	}
 	return m.store.Save(existing)
+}
+
+func (m Manager) DetectExplicitRemember(input ExplicitRememberInput) ([]harnessruntime.MemoryCandidate, string, bool) {
+	statement, ok := normalizeRememberStatement(input.Instruction)
+	if !ok {
+		return nil, "", false
+	}
+
+	now := time.Now()
+	candidate := harnessruntime.MemoryCandidate{
+		Kind:        "fact",
+		Scope:       "session",
+		Content:     "用户要求记住：" + statement,
+		Tags:        []string{"memory:explicit"},
+		SourceRunID: input.RunID,
+		CreatedAt:   now,
+	}
+	answer := "好的，我会把这条信息记在当前会话的 Memory 里。"
+
+	switch {
+	case strings.HasPrefix(statement, "我是"):
+		value := strings.TrimSpace(strings.TrimPrefix(statement, "我是"))
+		if value == "" {
+			break
+		}
+		candidate.Content = "用户身份是" + value
+		candidate.Tags = []string{"memory:explicit", "user:identity"}
+		if looksLikeName(value) {
+			candidate.Tags = append(candidate.Tags, "user:name")
+		}
+		answer = "好的，我会记住你是" + value + "。"
+	case strings.HasPrefix(statement, "我叫"):
+		value := strings.TrimSpace(strings.TrimPrefix(statement, "我叫"))
+		if value == "" {
+			break
+		}
+		candidate.Content = "用户名字是" + value
+		candidate.Tags = []string{"memory:explicit", "user:identity", "user:name"}
+		answer = "好的，我会记住你叫" + value + "。"
+	case strings.HasPrefix(statement, "我的名字是"):
+		value := strings.TrimSpace(strings.TrimPrefix(statement, "我的名字是"))
+		if value == "" {
+			break
+		}
+		candidate.Content = "用户名字是" + value
+		candidate.Tags = []string{"memory:explicit", "user:identity", "user:name"}
+		answer = "好的，我会记住你的名字是" + value + "。"
+	case strings.HasPrefix(statement, "你是"):
+		value := strings.TrimSpace(strings.TrimPrefix(statement, "你是"))
+		if value == "" {
+			break
+		}
+		candidate.Content = "本会话中助手身份设定为" + value
+		candidate.Kind = "preference"
+		candidate.Tags = []string{"memory:explicit", "assistant:identity"}
+		answer = "好的，我会记住我是" + value + "。"
+	}
+
+	return []harnessruntime.MemoryCandidate{candidate}, answer, true
 }
 
 func (m Manager) ExtractCandidates(input ExtractInput) []harnessruntime.MemoryCandidate {
@@ -185,6 +250,10 @@ func matchesGoal(goal string, entry harnessruntime.MemoryEntry) bool {
 		return true
 	}
 
+	if matchesIdentityGoal(goal, entry.Tags) {
+		return true
+	}
+
 	haystack := strings.ToLower(entry.Content + " " + strings.Join(entry.Tags, " "))
 	for _, token := range strings.Fields(goal) {
 		if len(token) < 3 {
@@ -195,6 +264,80 @@ func matchesGoal(goal string, entry harnessruntime.MemoryEntry) bool {
 		}
 	}
 	return false
+}
+
+func matchesIdentityGoal(goal string, tags []string) bool {
+	compactGoal := strings.ReplaceAll(goal, " ", "")
+	switch {
+	case strings.Contains(compactGoal, "我是谁"),
+		strings.Contains(compactGoal, "我叫什么"),
+		strings.Contains(compactGoal, "我的名字"):
+		return hasAnyTag(tags, "user:identity", "user:name")
+	case strings.Contains(compactGoal, "你是谁"):
+		return hasAnyTag(tags, "assistant:identity")
+	default:
+		return false
+	}
+}
+
+func hasAnyTag(tags []string, expected ...string) bool {
+	if len(tags) == 0 {
+		return false
+	}
+	actual := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		actual[strings.ToLower(tag)] = struct{}{}
+	}
+	for _, item := range expected {
+		if _, ok := actual[strings.ToLower(item)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeRememberStatement(instruction string) (string, bool) {
+	statement := strings.TrimSpace(instruction)
+	if statement == "" {
+		return "", false
+	}
+
+	suffixPhrases := []string{
+		"请记住", "记住", "请记下", "记下来", "记一下", "帮我记住", "麻烦记住",
+	}
+	for _, phrase := range suffixPhrases {
+		if idx := strings.Index(statement, phrase); idx >= 0 {
+			prefix := strings.TrimSpace(statement[:idx])
+			if prefix != "" {
+				return trimStatementNoise(prefix), true
+			}
+		}
+	}
+
+	prefixPhrases := []string{
+		"记住", "请记住", "请记下", "记下来", "记一下",
+	}
+	for _, phrase := range prefixPhrases {
+		if strings.HasPrefix(statement, phrase) {
+			remainder := strings.TrimSpace(strings.TrimPrefix(statement, phrase))
+			if remainder != "" {
+				return trimStatementNoise(remainder), true
+			}
+		}
+	}
+
+	return "", false
+}
+
+func trimStatementNoise(statement string) string {
+	statement = strings.TrimSpace(statement)
+	statement = strings.Trim(statement, "，,。.!！？?；;：: ")
+	return statement
+}
+
+func looksLikeName(value string) bool {
+	length := len([]rune(strings.TrimSpace(value)))
+	return length > 0 && length <= 8
 }
 
 func scopeWeight(scope string) int {

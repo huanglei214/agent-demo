@@ -48,6 +48,10 @@ func (p Paths) SessionMessagesPath(sessionID string) string {
 	return filepath.Join(p.SessionDir(sessionID), "messages.jsonl")
 }
 
+func (p Paths) SessionInputHistoryPath(sessionID string) string {
+	return filepath.Join(p.SessionDir(sessionID), "input.history")
+}
+
 func (p Paths) RunPath(runID string) string {
 	return filepath.Join(p.RunDir(runID), "run.json")
 }

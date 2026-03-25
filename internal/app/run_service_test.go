@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +10,8 @@ import (
 	"time"
 
 	"github.com/huanglei214/agent-demo/internal/config"
+	"github.com/huanglei214/agent-demo/internal/memory"
+	"github.com/huanglei214/agent-demo/internal/model"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
 )
 
@@ -117,6 +121,99 @@ func TestStartRunReusesExistingSession(t *testing.T) {
 	}
 }
 
+func TestStartRunRoutesRememberRequestsToMemory(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+	cfg := config.Load(workspace)
+	services := NewServices(cfg)
+
+	response, err := services.StartRun(RunRequest{
+		Instruction: "我是黄磊，请记住",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    5,
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	if response.Result == nil || !strings.Contains(response.Result.Output, "黄磊") {
+		t.Fatalf("expected memory-routed response mentioning 黄磊, got %#v", response.Result)
+	}
+
+	if _, err := os.Stat(filepath.Join(workspace, "user_info.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected no user_info.txt file to be created, got err=%v", err)
+	}
+
+	events, err := services.ReplayRun(response.Run.ID)
+	if err != nil {
+		t.Fatalf("replay run: %v", err)
+	}
+	assertEventPresent(t, events, "memory.routed")
+	assertEventPresent(t, events, "memory.committed")
+	assertEventAbsent(t, events, "tool.called")
+	assertEventAbsent(t, events, "fs.file_created")
+
+	recalled, err := services.MemoryManager.Recall(memory.RecallQuery{
+		SessionID: response.Run.SessionID,
+		Goal:      "我是谁",
+		Limit:     5,
+	})
+	if err != nil {
+		t.Fatalf("recall memory: %v", err)
+	}
+	if len(recalled) == 0 || !strings.Contains(recalled[0].Content, "黄磊") {
+		t.Fatalf("expected recalled memory to contain 黄磊, got %#v", recalled)
+	}
+}
+
+func TestStartRunInterceptsMemoryLikeWriteFileToolInConversationMode(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+	cfg := config.Load(workspace)
+	services := NewServices(cfg)
+	services.ModelFactory = func() (model.Model, error) {
+		return staticActionModel{
+			response: model.Action{
+				Action: "tool",
+				Tool:   "fs.write_file",
+				Input: map[string]any{
+					"path":      "user_info.txt",
+					"content":   "我已记住你的名字：黄磊",
+					"overwrite": true,
+				},
+			},
+		}, nil
+	}
+
+	response, err := services.StartRun(RunRequest{
+		Instruction: "我是黄磊，请记住",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    5,
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	if response.Result == nil || !strings.Contains(response.Result.Output, "黄磊") {
+		t.Fatalf("expected intercepted response mentioning 黄磊, got %#v", response.Result)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "user_info.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected intercepted write_file not to create user_info.txt, got err=%v", err)
+	}
+
+	events, err := services.ReplayRun(response.Run.ID)
+	if err != nil {
+		t.Fatalf("replay run: %v", err)
+	}
+	assertEventPresent(t, events, "memory.routed")
+	assertEventAbsent(t, events, "tool.called")
+	assertEventAbsent(t, events, "fs.file_created")
+}
+
 func TestResumeRunContinuesPendingRun(t *testing.T) {
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
@@ -215,4 +312,28 @@ func assertEventPresent(t *testing.T, events []harnessruntime.Event, eventType s
 		}
 	}
 	t.Fatalf("expected event %q in %#v", eventType, events)
+}
+
+func assertEventAbsent(t *testing.T, events []harnessruntime.Event, eventType string) {
+	t.Helper()
+
+	for _, event := range events {
+		if event.Type == eventType {
+			t.Fatalf("did not expect event %q in %#v", eventType, events)
+		}
+	}
+}
+
+type staticActionModel struct {
+	response model.Action
+}
+
+func (m staticActionModel) Generate(ctx context.Context, req model.Request) (model.Response, error) {
+	_ = ctx
+	_ = req
+	data, _ := json.Marshal(m.response)
+	return model.Response{
+		Text:         string(data),
+		FinishReason: "stop",
+	}, nil
 }

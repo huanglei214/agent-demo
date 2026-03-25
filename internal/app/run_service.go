@@ -265,6 +265,11 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 	})
 
 	runPrompt := s.PromptBuilder.BuildRunPrompt(task, plan, currentStep, modelContext, s.promptToolMetadata())
+	explicitMemoryCandidates, explicitMemoryAnswer, routedToMemory := s.MemoryManager.DetectExplicitRemember(memory.ExplicitRememberInput{
+		SessionID:   session.ID,
+		RunID:       run.ID,
+		Instruction: task.Instruction,
+	})
 	preModelEvents := []harnessruntime.Event{
 		s.newEvent(run, task.ID, session.ID, sequence+1, "memory.recalled", "memory", map[string]any{
 			"count": len(recalledMemories),
@@ -279,45 +284,62 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 			"summary_count": len(summaries),
 			"recent_count":  len(modelContext.Recent),
 		}),
-		s.newEvent(run, task.ID, session.ID, sequence+4, "model.called", "runtime", map[string]any{
-			"provider": run.Provider,
-			"model":    run.Model,
-		}),
 	}
 	for _, event := range preModelEvents {
 		if err := s.EventStore.Append(event); err != nil {
 			return RunResponse{}, err
 		}
 	}
-
-	provider, err := s.ModelFactory()
-	if err != nil {
-		return s.failRun(run, task.ID, session.ID, state, err, sequence+4)
-	}
+	sequence += int64(len(preModelEvents))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	modelResponse, err := provider.Generate(ctx, model.Request{
-		SystemPrompt: runPrompt.System,
-		Input:        runPrompt.Input,
-		Metadata:     runPrompt.Metadata,
-	})
+	provider, err := s.ModelFactory()
 	if err != nil {
-		return s.failRun(run, task.ID, session.ID, state, err, sequence+4)
+		return s.failRun(run, task.ID, session.ID, state, err, sequence+1)
 	}
 
-	sequence += int64(len(preModelEvents))
-	if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "model.responded", "model", map[string]any{
-		"finish_reason": modelResponse.FinishReason,
-	})); err != nil {
-		return RunResponse{}, err
-	}
+	finalAnswer := ""
+	turnCount := state.TurnCount
+	action := model.Action{Action: "final", Answer: explicitMemoryAnswer}
 
-	action := parseAction(modelResponse.Text)
-	finalAnswer := action.Answer
-	sequence++
-	turnCount := state.TurnCount + 1
+	if routedToMemory {
+		if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "memory.routed", "memory", map[string]any{
+			"count": len(explicitMemoryCandidates),
+		})); err != nil {
+			return RunResponse{}, err
+		}
+		finalAnswer = explicitMemoryAnswer
+		sequence++
+	} else {
+		if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "model.called", "runtime", map[string]any{
+			"provider": run.Provider,
+			"model":    run.Model,
+		})); err != nil {
+			return RunResponse{}, err
+		}
+
+		modelResponse, err := provider.Generate(ctx, model.Request{
+			SystemPrompt: runPrompt.System,
+			Input:        runPrompt.Input,
+			Metadata:     runPrompt.Metadata,
+		})
+		if err != nil {
+			return s.failRun(run, task.ID, session.ID, state, err, sequence+1)
+		}
+
+		if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+2, "model.responded", "model", map[string]any{
+			"finish_reason": modelResponse.FinishReason,
+		})); err != nil {
+			return RunResponse{}, err
+		}
+
+		action = parseAction(modelResponse.Text)
+		finalAnswer = action.Answer
+		sequence += 2
+		turnCount = state.TurnCount + 1
+	}
 
 	if action.Action == "delegate" {
 		canDelegate, reason := s.DelegationManager.CanDelegate(ctx, run, *currentStep)
@@ -428,124 +450,140 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 		if action.Tool == "" {
 			return s.failRun(run, task.ID, session.ID, state, errors.New("model requested tool execution without tool name"), sequence+1)
 		}
-		if err := s.DelegationManager.ValidateTools(run, action.Tool); err != nil {
-			if appendErr := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "subagent.rejected", "delegation", map[string]any{
+		if action.Tool == "fs.write_file" && len(explicitMemoryCandidates) > 0 {
+			if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "memory.routed", "memory", map[string]any{
+				"count":  len(explicitMemoryCandidates),
+				"source": "tool_intercept",
 				"tool":   action.Tool,
-				"reason": err.Error(),
-			})); appendErr != nil {
-				return RunResponse{}, appendErr
-			}
-			return s.failRun(run, task.ID, session.ID, state, err, sequence+2)
-		}
-
-		if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "tool.called", "runtime", map[string]any{
-			"tool":  action.Tool,
-			"input": action.Input,
-		})); err != nil {
-			return RunResponse{}, err
-		}
-
-		toolResult, err := s.ToolExecutor.Execute(ctx, action.Tool, action.Input)
-		if err != nil {
-			if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+2, "tool.failed", "tool", map[string]any{
-				"tool":  action.Tool,
-				"error": err.Error(),
 			})); err != nil {
 				return RunResponse{}, err
 			}
-			return s.failRun(run, task.ID, session.ID, state, err, sequence+3)
-		}
-
-		if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+2, "tool.succeeded", "tool", map[string]any{
-			"tool":   action.Tool,
-			"result": toolResult.Content,
-		})); err != nil {
-			return RunResponse{}, err
-		}
-
-		sequence += 2
-
-		if action.Tool == "fs.write_file" {
-			eventType := "fs.file_created"
-			if mode, ok := toolResult.Content["write_mode"].(string); ok && mode == "updated" {
-				eventType = "fs.file_updated"
-			}
-			if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, eventType, "tool", toolResult.Content)); err != nil {
-				return RunResponse{}, err
+			finalAnswer = explicitMemoryAnswer
+			action = model.Action{
+				Action: "final",
+				Answer: finalAnswer,
 			}
 			sequence++
-		}
+		} else {
+			if err := s.DelegationManager.ValidateTools(run, action.Tool); err != nil {
+				if appendErr := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "subagent.rejected", "delegation", map[string]any{
+					"tool":   action.Tool,
+					"reason": err.Error(),
+				})); appendErr != nil {
+					return RunResponse{}, appendErr
+				}
+				return s.failRun(run, task.ID, session.ID, state, err, sequence+2)
+			}
 
-		recentEvents, err = s.EventStore.ReadAll(run.ID)
-		if err != nil {
-			return RunResponse{}, err
-		}
+			if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "tool.called", "runtime", map[string]any{
+				"tool":  action.Tool,
+				"input": action.Input,
+			})); err != nil {
+				return RunResponse{}, err
+			}
 
-		shouldCompact, reason := s.ContextManager.ShouldCompact(harnesscontext.CompactionCheckInput{
-			TokenUsage:       len(runPrompt.System) + len(runPrompt.Input),
-			TokenBudget:      1600,
-			RecentEventCount: len(recentEvents),
-			LastToolBytes:    toolBytes(toolResult.Content),
-		})
-		if shouldCompact {
-			summary, err := s.ContextManager.Compact(harnesscontext.CompactInput{
-				RunID:        run.ID,
-				Scope:        "run",
-				Plan:         plan,
-				CurrentStep:  currentStep,
-				RecentEvents: recentEvents,
-			})
+			toolResult, err := s.ToolExecutor.Execute(ctx, action.Tool, action.Input)
+			if err != nil {
+				if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+2, "tool.failed", "tool", map[string]any{
+					"tool":  action.Tool,
+					"error": err.Error(),
+				})); err != nil {
+					return RunResponse{}, err
+				}
+				return s.failRun(run, task.ID, session.ID, state, err, sequence+3)
+			}
+
+			if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+2, "tool.succeeded", "tool", map[string]any{
+				"tool":   action.Tool,
+				"result": toolResult.Content,
+			})); err != nil {
+				return RunResponse{}, err
+			}
+
+			sequence += 2
+
+			if action.Tool == "fs.write_file" {
+				eventType := "fs.file_created"
+				if mode, ok := toolResult.Content["write_mode"].(string); ok && mode == "updated" {
+					eventType = "fs.file_updated"
+				}
+				if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, eventType, "tool", toolResult.Content)); err != nil {
+					return RunResponse{}, err
+				}
+				sequence++
+			}
+
+			recentEvents, err = s.EventStore.ReadAll(run.ID)
 			if err != nil {
 				return RunResponse{}, err
 			}
-			summaries = append(summaries, summary)
-			if err := s.StateStore.SaveSummaries(run.ID, summaries); err != nil {
-				return RunResponse{}, err
+
+			shouldCompact, reason := s.ContextManager.ShouldCompact(harnesscontext.CompactionCheckInput{
+				TokenUsage:       len(runPrompt.System) + len(runPrompt.Input),
+				TokenBudget:      1600,
+				RecentEventCount: len(recentEvents),
+				LastToolBytes:    toolBytes(toolResult.Content),
+			})
+			if shouldCompact {
+				summary, err := s.ContextManager.Compact(harnesscontext.CompactInput{
+					RunID:        run.ID,
+					Scope:        "run",
+					Plan:         plan,
+					CurrentStep:  currentStep,
+					RecentEvents: recentEvents,
+				})
+				if err != nil {
+					return RunResponse{}, err
+				}
+				summaries = append(summaries, summary)
+				if err := s.StateStore.SaveSummaries(run.ID, summaries); err != nil {
+					return RunResponse{}, err
+				}
+				if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "context.compacted", "context", map[string]any{
+					"summary_id": summary.ID,
+					"scope":      summary.Scope,
+					"reason":     reason,
+				})); err != nil {
+					return RunResponse{}, err
+				}
+				sequence++
 			}
-			if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "context.compacted", "context", map[string]any{
-				"summary_id": summary.ID,
-				"scope":      summary.Scope,
-				"reason":     reason,
+
+			followUpPrompt := s.PromptBuilder.BuildFollowUpPrompt(task, action.Tool, toolResult.Content, summaries)
+			if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "model.called", "runtime", map[string]any{
+				"provider": run.Provider,
+				"model":    run.Model,
+				"phase":    "post_tool",
+				"tool":     action.Tool,
 			})); err != nil {
 				return RunResponse{}, err
 			}
-			sequence++
-		}
 
-		followUpPrompt := s.PromptBuilder.BuildFollowUpPrompt(task, action.Tool, toolResult.Content, summaries)
-		if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+1, "model.called", "runtime", map[string]any{
-			"provider": run.Provider,
-			"model":    run.Model,
-			"phase":    "post_tool",
-			"tool":     action.Tool,
-		})); err != nil {
-			return RunResponse{}, err
-		}
+			followUpResponse, err := provider.Generate(ctx, model.Request{
+				SystemPrompt: followUpPrompt.System,
+				Input:        followUpPrompt.Input,
+				Metadata:     followUpPrompt.Metadata,
+			})
+			if err != nil {
+				return s.failRun(run, task.ID, session.ID, state, err, sequence+2)
+			}
 
-		followUpResponse, err := provider.Generate(ctx, model.Request{
-			SystemPrompt: followUpPrompt.System,
-			Input:        followUpPrompt.Input,
-			Metadata:     followUpPrompt.Metadata,
-		})
-		if err != nil {
-			return s.failRun(run, task.ID, session.ID, state, err, sequence+2)
-		}
+			if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+2, "model.responded", "model", map[string]any{
+				"finish_reason": followUpResponse.FinishReason,
+				"phase":         "post_tool",
+			})); err != nil {
+				return RunResponse{}, err
+			}
 
-		if err := s.EventStore.Append(s.newEvent(run, task.ID, session.ID, sequence+2, "model.responded", "model", map[string]any{
-			"finish_reason": followUpResponse.FinishReason,
-			"phase":         "post_tool",
-		})); err != nil {
-			return RunResponse{}, err
-		}
+			followUpAction := parseAction(followUpResponse.Text)
+			if followUpAction.Action != "final" || strings.TrimSpace(followUpAction.Answer) == "" {
+				return s.failRun(run, task.ID, session.ID, state, errors.New("post-tool model response did not produce a final answer"), sequence+3)
+			}
 
-		followUpAction := parseAction(followUpResponse.Text)
-		if followUpAction.Action != "final" || strings.TrimSpace(followUpAction.Answer) == "" {
-			return s.failRun(run, task.ID, session.ID, state, errors.New("post-tool model response did not produce a final answer"), sequence+3)
+			finalAnswer = followUpAction.Answer
+			sequence += 2
+			turnCount++
 		}
-
-		finalAnswer = followUpAction.Answer
-		sequence += 2
-		turnCount++
 	}
 
 	if strings.TrimSpace(finalAnswer) == "" {
@@ -593,14 +631,15 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 		return RunResponse{}, err
 	}
 
-	candidates := s.MemoryManager.ExtractCandidates(memory.ExtractInput{
+	candidates := append([]harnessruntime.MemoryCandidate{}, explicitMemoryCandidates...)
+	candidates = append(candidates, s.MemoryManager.ExtractCandidates(memory.ExtractInput{
 		SessionID: session.ID,
 		RunID:     run.ID,
 		Goal:      task.Instruction,
 		Result:    result.Output,
 		Provider:  run.Provider,
 		Model:     run.Model,
-	})
+	})...)
 	committedEntries := []harnessruntime.MemoryEntry{}
 	if err := s.StateStore.SaveRunMemories(harnessruntime.RunMemories{
 		RunID:      run.ID,
