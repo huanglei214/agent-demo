@@ -8,16 +8,33 @@
 ### Requirement: 本地 Web UI 入口
 系统 MUST 提供一个面向本机开发的 Web UI，用于展示当前 Harness 的核心运行时信息。
 
+#### Scenario: 本地 Web UI 由独立 Web 入口服务
+- **WHEN** 用户启动本地 Web UI 所依赖的后端服务
+- **THEN** 系统 MUST 通过独立的 Web 可执行入口启动本地 HTTP 服务
+- **THEN** 该入口 MUST 保持与现有 Web UI 兼容的 API 和路由行为
+- **THEN** 用户 MUST 不需要先进入 CLI 再通过子命令附带启动 Web 服务
+
 #### Scenario: 打开本地 Web UI
 - **WHEN** 用户启动本地 Web UI 并在浏览器中访问页面
 - **THEN** 系统 MUST 展示一个可交互的前端页面
 - **THEN** 页面 MUST 能够访问本地 HTTP API 获取运行时数据
 
-#### Scenario: 打开首页时查看最近入口
+#### Scenario: 打开首页时进入 chat-first 页面
 - **WHEN** 用户打开本地 Web UI 首页
+- **THEN** 系统 MUST 展示一个 chat-first 页面作为默认入口
+- **THEN** 页面 MUST 展示最近的 `Session` 历史
+- **THEN** 用户 MUST 可以直接选择某个 `Session` 继续对话，或发起新的聊天
+
+#### Scenario: 打开启动台时查看最近入口
+- **WHEN** 用户打开独立的启动台页面
 - **THEN** 系统 MUST 展示最近的 `Session` 列表
 - **THEN** 系统 MUST 展示最近的 `Run` 列表
 - **THEN** 用户 MUST 可以通过点击列表项直接进入对应详情页
+
+#### Scenario: 调试台与聊天入口并存
+- **WHEN** 系统新增 AG-UI 聊天入口
+- **THEN** 现有基于 `sessions / runs / replay / events` 的调试台能力 MUST 继续可用
+- **THEN** 系统 MUST 不要求现有本地 Web UI 页面全部迁移到 AG-UI 才能工作
 
 ### Requirement: 会话与运行详情查看
 系统 MUST 在 Web UI 中展示 `Session` 和 `Run` 的核心信息，便于调试和观察执行过程。
@@ -26,6 +43,12 @@
 - **WHEN** 用户在 Web UI 中打开某个 `Session`
 - **THEN** 系统 MUST 展示最近消息
 - **THEN** 系统 MUST 展示关联的 `Run` 列表
+
+#### Scenario: chat-first 页面接入 AG-UI 链路
+- **WHEN** 用户通过 chat-first 页面发起一次对话
+- **THEN** 系统 MUST 通过 AG-UI 兼容事件流实时展示消息、步骤和工具活动
+- **THEN** 系统 MUST 允许前端同时获得聊天事件流与现有 run/session 标识
+- **THEN** 用户 MUST 仍然可以跳转到现有 run/session 调试页查看 inspect、replay 和原始事件
 
 #### Scenario: 查看 run 详情
 - **WHEN** 用户在 Web UI 中打开某个 `Run`

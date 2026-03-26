@@ -29,7 +29,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("Harness UI crashed", error, info);
+    console.error("Harness UI crashed", {
+      error,
+      info,
+      pathname: window.location.pathname,
+    });
   }
 
   handleReset = () => {

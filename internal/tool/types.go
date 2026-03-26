@@ -10,6 +10,7 @@ type AccessMode string
 const (
 	AccessReadOnly AccessMode = "read_only"
 	AccessWrite    AccessMode = "write"
+	AccessExec     AccessMode = "exec"
 )
 
 type Descriptor struct {
@@ -27,4 +28,9 @@ type Tool interface {
 
 type Result struct {
 	Content map[string]any `json:"content"`
+}
+
+type DetailedError interface {
+	error
+	Details() map[string]any
 }

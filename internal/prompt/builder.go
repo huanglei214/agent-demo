@@ -58,8 +58,12 @@ func (b Builder) BuildFollowUpPrompt(task harnessruntime.Task, toolName string, 
 		b.templates.base,
 		b.templates.defaultRole,
 		`Follow-up rule:
-You have already received a tool result and now must answer the user.
-You MUST return valid JSON only in this shape:
+You have already received a tool result.
+If the result is not yet sufficient, you may call another provided tool.
+If the user asked for a factual answer, do not stop at raw links or search results when a follow-up fetch can answer more directly.
+You MUST return valid JSON only in one of these shapes:
+{"action":"tool","tool":"...","input":{...}}
+or
 {"action":"final","answer":"..."}`,
 	}, "\n\n")
 

@@ -1,18 +1,18 @@
 package ark
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/volcengine/volcengine-go-sdk/service/arkruntime"
+	arksdkmodel "github.com/volcengine/volcengine-go-sdk/service/arkruntime/model"
+
 	"github.com/huanglei214/agent-demo/internal/config"
-	"github.com/huanglei214/agent-demo/internal/model"
+	internalmodel "github.com/huanglei214/agent-demo/internal/model"
 )
 
 type Provider struct {
@@ -90,100 +90,117 @@ func New(cfg config.ModelConfig) Provider {
 	}
 }
 
-func (p Provider) Generate(ctx context.Context, req model.Request) (model.Response, error) {
+func (p Provider) Generate(ctx context.Context, req internalmodel.Request) (internalmodel.Response, error) {
 	if p.config.Ark.APIKey == "" || p.config.Ark.BaseURL == "" || p.config.Ark.ModelID == "" {
-		return model.Response{}, &Error{
+		return internalmodel.Response{}, &Error{
 			Kind:    ErrorKindConfig,
 			Message: "provider is not configured",
 		}
 	}
 
-	requestBody := chatCompletionRequest{
+	client := arkruntime.NewClientWithApiKey(
+		p.config.Ark.APIKey,
+		arkruntime.WithBaseUrl(strings.TrimRight(p.config.Ark.BaseURL, "/")),
+		arkruntime.WithHTTPClient(p.http),
+	)
+
+	resp, err := client.CreateChatCompletion(ctx, arksdkmodel.CreateChatCompletionRequest{
 		Model: p.config.Ark.ModelID,
-		Messages: []chatMessage{
+		Messages: []*arksdkmodel.ChatCompletionMessage{
 			{
-				Role:    "system",
-				Content: req.SystemPrompt,
+				Role:    arksdkmodel.ChatMessageRoleSystem,
+				Content: textContent(req.SystemPrompt),
 			},
 			{
-				Role:    "user",
-				Content: req.Input,
+				Role:    arksdkmodel.ChatMessageRoleUser,
+				Content: textContent(req.Input),
 			},
 		},
-		Stream: false,
+	})
+	if err != nil {
+		return internalmodel.Response{}, classifySDKError(ctx, err)
 	}
 
-	data, err := json.Marshal(requestBody)
-	if err != nil {
-		return model.Response{}, &Error{
-			Kind:    ErrorKindRequestBuild,
-			Message: "marshal request body",
-			Err:     err,
+	if len(resp.Choices) == 0 {
+		return internalmodel.Response{}, &Error{
+			Kind:    ErrorKindEmptyChoices,
+			Message: "request returned no choices",
 		}
 	}
 
-	url := strings.TrimRight(p.config.Ark.BaseURL, "/") + "/chat/completions"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+	text, err := messageContentToText(resp.Choices[0].Message.Content)
 	if err != nil {
-		return model.Response{}, &Error{
-			Kind:    ErrorKindRequestBuild,
-			Message: "create request",
-			Err:     err,
-		}
-	}
-
-	httpReq.Header.Set("Authorization", "Bearer "+p.config.Ark.APIKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := p.http.Do(httpReq)
-	if err != nil {
-		return model.Response{}, classifyTransportError(ctx, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return model.Response{}, &Error{
-			Kind:    ErrorKindDecodeResponse,
-			Message: "read response body",
-			Err:     err,
-		}
-	}
-
-	if resp.StatusCode >= 400 {
-		return model.Response{}, &Error{
-			Kind:       ErrorKindHTTPStatus,
-			StatusCode: resp.StatusCode,
-			Message:    extractErrorMessage(body, resp.Status),
-		}
-	}
-
-	var decoded chatCompletionResponse
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		return model.Response{}, &Error{
+		return internalmodel.Response{}, &Error{
 			Kind:    ErrorKindDecodeResponse,
 			Message: "decode success response",
 			Err:     err,
 		}
 	}
 
-	if len(decoded.Choices) == 0 {
-		return model.Response{}, &Error{
-			Kind:    ErrorKindEmptyChoices,
-			Message: "request returned no choices",
+	return internalmodel.Response{
+		Text:         text,
+		FinishReason: string(resp.Choices[0].FinishReason),
+		Metadata: map[string]any{
+			"id":      resp.ID,
+			"model":   resp.Model,
+			"created": resp.Created,
+			"usage":   usageMetadata(resp.Usage),
+		},
+	}, nil
+}
+
+func classifySDKError(ctx context.Context, err error) error {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return &Error{
+			Kind:    ErrorKindTimeout,
+			Message: "request timed out",
+			Err:     err,
+		}
+	case errors.Is(err, context.Canceled), errors.Is(ctx.Err(), context.Canceled):
+		return &Error{
+			Kind:    ErrorKindCanceled,
+			Message: "request was canceled",
+			Err:     err,
 		}
 	}
 
-	return model.Response{
-		Text:         decoded.Choices[0].Message.Content,
-		FinishReason: decoded.Choices[0].FinishReason,
-		Metadata: map[string]any{
-			"id":      decoded.ID,
-			"model":   decoded.Model,
-			"created": decoded.Created,
-			"usage":   decoded.Usage,
-		},
-	}, nil
+	var apiErr *arksdkmodel.APIError
+	if errors.As(err, &apiErr) {
+		return &Error{
+			Kind:       ErrorKindHTTPStatus,
+			StatusCode: apiErr.HTTPStatusCode,
+			Message:    strings.TrimSpace(apiErr.Message),
+			Err:        err,
+		}
+	}
+
+	var requestErr *arksdkmodel.RequestError
+	if errors.As(err, &requestErr) {
+		switch {
+		case errors.Is(requestErr.Err, context.DeadlineExceeded):
+			return &Error{
+				Kind:    ErrorKindTimeout,
+				Message: "request timed out",
+				Err:     err,
+			}
+		case errors.Is(requestErr.Err, context.Canceled):
+			return &Error{
+				Kind:    ErrorKindCanceled,
+				Message: "request was canceled",
+				Err:     err,
+			}
+		case requestErr.HTTPStatusCode >= 400:
+			return &Error{
+				Kind:       ErrorKindHTTPStatus,
+				StatusCode: requestErr.HTTPStatusCode,
+				Message:    requestErrorMessage(requestErr),
+				Err:        err,
+			}
+		}
+	}
+
+	return classifyTransportError(ctx, err)
 }
 
 func classifyTransportError(ctx context.Context, err error) error {
@@ -209,45 +226,62 @@ func classifyTransportError(ctx context.Context, err error) error {
 	}
 }
 
-func extractErrorMessage(body []byte, fallback string) string {
-	var decoded chatCompletionResponse
-	if err := json.Unmarshal(body, &decoded); err == nil && strings.TrimSpace(decoded.Error.Message) != "" {
-		return decoded.Error.Message
+func requestErrorMessage(err *arksdkmodel.RequestError) string {
+	if err == nil {
+		return ""
 	}
 
-	trimmed := strings.TrimSpace(string(body))
-	if trimmed != "" {
-		return trimmed
+	if err.Err != nil {
+		return strings.TrimSpace(err.Err.Error())
 	}
-	return fallback
+	return "request failed"
 }
 
-type chatCompletionRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
-	Stream   bool          `json:"stream"`
+func textContent(text string) *arksdkmodel.ChatCompletionMessageContent {
+	return &arksdkmodel.ChatCompletionMessageContent{
+		StringValue: &text,
+	}
 }
 
-type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+func messageContentToText(content *arksdkmodel.ChatCompletionMessageContent) (string, error) {
+	if content == nil {
+		return "", errors.New("response choice content is empty")
+	}
+	if content.StringValue != nil {
+		return *content.StringValue, nil
+	}
+	if len(content.ListValue) == 0 {
+		return "", errors.New("response choice content is empty")
+	}
+
+	var parts []string
+	for _, part := range content.ListValue {
+		if part == nil {
+			continue
+		}
+		if strings.TrimSpace(part.Text) == "" {
+			continue
+		}
+		parts = append(parts, part.Text)
+	}
+	if len(parts) == 0 {
+		return "", errors.New("response choice content is empty")
+	}
+	return strings.Join(parts, "\n"), nil
 }
 
-type chatCompletionResponse struct {
-	ID      string                   `json:"id"`
-	Model   string                   `json:"model"`
-	Created int64                    `json:"created"`
-	Choices []chatCompletionChoice   `json:"choices"`
-	Usage   map[string]any           `json:"usage"`
-	Error   chatCompletionErrorField `json:"error"`
-}
-
-type chatCompletionChoice struct {
-	FinishReason string      `json:"finish_reason"`
-	Index        int         `json:"index"`
-	Message      chatMessage `json:"message"`
-}
-
-type chatCompletionErrorField struct {
-	Message string `json:"message"`
+func usageMetadata(usage arksdkmodel.Usage) map[string]any {
+	return map[string]any{
+		"prompt_tokens":     usage.PromptTokens,
+		"completion_tokens": usage.CompletionTokens,
+		"total_tokens":      usage.TotalTokens,
+		"prompt_tokens_details": map[string]any{
+			"cached_tokens":      usage.PromptTokensDetails.CachedTokens,
+			"provisioned_tokens": usage.PromptTokensDetails.ProvisionedTokens,
+		},
+		"completion_tokens_details": map[string]any{
+			"reasoning_tokens":   usage.CompletionTokensDetails.ReasoningTokens,
+			"provisioned_tokens": usage.CompletionTokensDetails.ProvisionedTokens,
+		},
+	}
 }

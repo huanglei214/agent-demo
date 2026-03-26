@@ -1,4 +1,6 @@
 import type {
+  AGUIChatRequest,
+  AGUIEvent,
   ApiErrorResponse,
   CreateSessionResponse,
   HealthResponse,
@@ -48,11 +50,20 @@ export function createSession() {
 }
 
 export function inspectSession(sessionId: string, recent = 20) {
-  return request<SessionInspectResponse>(`/api/sessions/${sessionId}?recent=${recent}`);
+  return request<SessionInspectResponse>(`/api/sessions/${sessionId}?recent=${recent}`).then(
+    (response) => ({
+      ...response,
+      messages: Array.isArray(response.messages) ? response.messages : [],
+      runs: Array.isArray(response.runs) ? response.runs : [],
+    }),
+  );
 }
 
 export function listSessions(limit = 8) {
-  return request<SessionsResponse>(`/api/sessions?limit=${limit}`);
+  return request<SessionsResponse>(`/api/sessions?limit=${limit}`).then((response) => ({
+    ...response,
+    sessions: Array.isArray(response.sessions) ? response.sessions : [],
+  }));
 }
 
 export function startRun(body: StartRunRequest) {
@@ -67,7 +78,10 @@ export function inspectRun(runId: string) {
 }
 
 export function listRuns(limit = 8) {
-  return request<RunsResponse>(`/api/runs?limit=${limit}`);
+  return request<RunsResponse>(`/api/runs?limit=${limit}`).then((response) => ({
+    ...response,
+    runs: Array.isArray(response.runs) ? response.runs : [],
+  }));
 }
 
 export function replaySummary(runId: string) {
@@ -117,4 +131,69 @@ export function streamRun(runId: string, handlers: RunStreamHandlers) {
   };
 
   return source;
+}
+
+export async function streamAGUIChat(
+  body: AGUIChatRequest,
+  handlers: {
+    onEvent: (event: AGUIEvent) => void;
+  },
+) {
+  const response = await fetch("/api/agui/chat", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    let message = "request failed";
+    try {
+      const payload = (await response.json()) as ApiErrorResponse;
+      if (hasApiError(payload)) {
+        message = payload.error.message;
+      }
+    } catch {
+      // ignore fallback parse failures
+    }
+    throw new Error(message);
+  }
+
+  if (!response.body) {
+    throw new Error("stream response body is missing");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split("\n\n");
+    buffer = chunks.pop() ?? "";
+
+    for (const chunk of chunks) {
+      const lines = chunk
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => line.slice("data: ".length));
+      if (!lines.length) {
+        continue;
+      }
+      try {
+        handlers.onEvent(JSON.parse(lines.join("\n")) as AGUIEvent);
+      } catch (error) {
+        console.error("Failed to parse AG-UI SSE payload", {
+          chunk,
+          error,
+        });
+      }
+    }
+  }
 }

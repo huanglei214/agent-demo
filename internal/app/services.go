@@ -15,7 +15,9 @@ import (
 	"github.com/huanglei214/agent-demo/internal/store"
 	"github.com/huanglei214/agent-demo/internal/store/filesystem"
 	toolruntime "github.com/huanglei214/agent-demo/internal/tool"
+	bashtool "github.com/huanglei214/agent-demo/internal/tool/bash"
 	fstool "github.com/huanglei214/agent-demo/internal/tool/filesystem"
+	webtool "github.com/huanglei214/agent-demo/internal/tool/web"
 )
 
 type Dependencies struct {
@@ -108,9 +110,12 @@ func newToolRegistry(workspace string) *toolruntime.Registry {
 	registry := toolruntime.NewRegistry()
 	registry.Register(fstool.NewReadFileTool(workspace))
 	registry.Register(fstool.NewWriteFileTool(workspace))
+	registry.Register(fstool.NewStrReplaceTool(workspace))
 	registry.Register(fstool.NewListDirTool(workspace))
 	registry.Register(fstool.NewSearchTool(workspace))
-	registry.Register(fstool.NewStatTool(workspace))
+	registry.Register(webtool.NewSearchTool())
+	registry.Register(webtool.NewFetchTool())
+	registry.Register(bashtool.NewExecTool(workspace))
 	return registry
 }
 

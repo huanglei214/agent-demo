@@ -33,7 +33,7 @@ echo "[dev] starting local API on http://${HOST:-127.0.0.1}:${PORT:-8080}"
     MODEL="${MODEL:-}" \
     WORKSPACE="${WORKSPACE:-$ROOT_DIR}" \
     HOST="${HOST:-127.0.0.1}" \
-    PORT="${PORT:-8080}"
+    PORT="${PORT:-8080}" 2>&1 | sed 's/^/[api] /'
 ) &
 API_PID=$!
 
@@ -42,7 +42,7 @@ sleep 1
 echo "[dev] starting web UI on http://127.0.0.1:5173"
 (
   cd "$ROOT_DIR"
-  make web-dev
+  make web-dev 2>&1 | sed 's/^/[web] /'
 ) &
 WEB_PID=$!
 

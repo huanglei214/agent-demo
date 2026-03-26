@@ -57,8 +57,8 @@ func (s Services) InspectSession(sessionID string, recentLimit int) (SessionInsp
 	}
 	return SessionInspectResponse{
 		Session:  session,
-		Messages: messages,
-		Runs:     runs,
+		Messages: ensureSessionMessages(messages),
+		Runs:     ensureSessionRunSummaries(runs),
 	}, nil
 }
 
@@ -97,4 +97,18 @@ func (s Services) listSessionRuns(sessionID string) ([]SessionRunSummary, error)
 		return runs[i].CreatedAt.After(runs[j].CreatedAt)
 	})
 	return runs, nil
+}
+
+func ensureSessionMessages(messages []harnessruntime.SessionMessage) []harnessruntime.SessionMessage {
+	if messages == nil {
+		return []harnessruntime.SessionMessage{}
+	}
+	return messages
+}
+
+func ensureSessionRunSummaries(runs []SessionRunSummary) []SessionRunSummary {
+	if runs == nil {
+		return []SessionRunSummary{}
+	}
+	return runs
 }

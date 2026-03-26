@@ -2,6 +2,7 @@ import { useEffect, useState, type MouseEvent } from "react";
 
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { JsonBlock } from "./components/JsonBlock";
+import { ChatPage } from "./pages/ChatPage";
 import { RunDetailsPage } from "./pages/RunDetailsPage";
 import { RunLauncherPage } from "./pages/RunLauncherPage";
 import { SessionDetailsPage } from "./pages/SessionDetailsPage";
@@ -9,7 +10,8 @@ import { getHealth } from "./lib/api";
 import { useI18n } from "./lib/i18n";
 
 type Route =
-  | { name: "home" }
+  | { name: "launchpad" }
+  | { name: "chat" }
   | { name: "run"; runId: string }
   | { name: "session"; sessionId: string };
 
@@ -18,10 +20,16 @@ function parseRoute(pathname: string): Route {
   if (segments[0] === "runs" && segments[1]) {
     return { name: "run", runId: segments[1] };
   }
+  if (segments[0] === "launchpad") {
+    return { name: "launchpad" };
+  }
+  if (segments[0] === "chat") {
+    return { name: "chat" };
+  }
   if (segments[0] === "sessions" && segments[1]) {
     return { name: "session", sessionId: segments[1] };
   }
-  return { name: "home" };
+  return { name: "chat" };
 }
 
 function navigate(pathname: string) {
@@ -67,6 +75,18 @@ export default function App() {
       reloadLabel={copy.errorBoundary.reload}
       fallbackMessage={copy.errorBoundary.unexpected}
     >
+      {route.name === "chat" ? (
+        <ChatPage
+          workspace=""
+          healthLabel={formatHealthLabel(health, copy)}
+          healthState={health}
+          language={language}
+          onLanguageChange={setLanguage}
+          onOpenSession={(sessionId) => navigate(`/sessions/${sessionId}`)}
+          onOpenRun={(runId) => navigate(`/runs/${runId}`)}
+        />
+      ) : null}
+      {route.name !== "chat" ? (
       <div className="app-shell">
         <header className="hero">
           <div>
@@ -100,8 +120,11 @@ export default function App() {
         </header>
 
         <nav className="top-nav">
-          <a href="/" onClick={(event) => linkTo(event, "/")}>
+          <a href="/launchpad" onClick={(event) => linkTo(event, "/launchpad")}>
             {copy.app.navLaunchpad}
+          </a>
+          <a href="/" onClick={(event) => linkTo(event, "/")}>
+            {copy.app.navChat}
           </a>
           <a href="/sessions/demo" onClick={(event) => linkTo(event, "/sessions/demo")}>
             {copy.app.navSession}
@@ -113,7 +136,7 @@ export default function App() {
 
         <main className="main-grid">
           <section className="main-panel">
-            {route.name === "home" ? (
+            {route.name === "launchpad" ? (
               <RunLauncherPage
                 onOpenRun={(runId) => navigate(`/runs/${runId}`)}
                 onOpenSession={(sessionId) => navigate(`/sessions/${sessionId}`)}
@@ -143,6 +166,7 @@ export default function App() {
               <JsonBlock
                 value={{
                   home: copy.app.paths.home,
+                  chat: copy.app.paths.chat,
                   session: copy.app.paths.session,
                   run: copy.app.paths.run,
                   api: copy.app.paths.api,
@@ -152,6 +176,7 @@ export default function App() {
           </aside>
         </main>
       </div>
+      ) : null}
     </ErrorBoundary>
   );
 }

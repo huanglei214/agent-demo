@@ -24,6 +24,12 @@
 - **THEN** 系统 MUST 创建新的 `Run`
 - **THEN** 系统 MUST 保持该 `Run` 与原 `Session` 的关联关系
 
+#### Scenario: 工具运行时收敛为核心工具面
+- **WHEN** 系统启动内置工具注册表
+- **THEN** 系统 MUST 暴露一组高频核心工具面
+- **THEN** 该核心工具面 MUST 包含本地工作区工具、外部检索工具和命令执行工具
+- **THEN** 系统 MUST 不要求低频辅助工具存在于默认核心集
+
 ### Requirement: Run 生命周期状态管理
 系统 MUST 管理 `Run` 的生命周期状态，并在状态变化时写入结构化事件。
 
@@ -42,6 +48,11 @@
 - **THEN** 系统 MUST 记录 `run.status_changed` 事件
 - **THEN** 系统 MUST 记录 `run.failed` 事件
 
+#### Scenario: 可观察执行入口驱动 run 生命周期
+- **WHEN** 系统通过面向实时消费的可观察执行入口启动 `Run`
+- **THEN** 系统 MUST 与现有同步执行路径保持相同的运行状态转换
+- **THEN** 系统 MUST 向实时观察者暴露生命周期事件和最终终态
+
 ### Requirement: 事件优先的执行轨迹
 系统 MUST 将执行过程中的关键行为记录为结构化事件，并以追加方式保存为事件流。
 
@@ -49,6 +60,12 @@
 - **WHEN** Agent 调用任意一个工具
 - **THEN** 系统 MUST 在工具执行前记录 `tool.called` 事件
 - **THEN** 系统 MUST 在工具成功后记录 `tool.succeeded` 事件，或在失败后记录 `tool.failed` 事件
+
+#### Scenario: 事件持久化同时对实时观察者广播
+- **WHEN** 运行时追加任意关键事件到持久化事件流
+- **THEN** 系统 MUST 保持原有事件持久化行为不变
+- **THEN** 系统 MUST 允许将同一事件广播给一个可选的实时观察者
+- **THEN** 实时观察者机制 MUST 不成为持久化事件写入成功的前置条件
 
 ### Requirement: 标准运行时事件契约
 系统 MUST 为运行时关键阶段使用固定的标准事件名称，以保证 inspect、replay 和后续入口扩展的一致性。
@@ -77,6 +94,11 @@
 
 ### Requirement: Cobra CLI 作为首个入口
 系统 MUST 提供基于 Cobra 的 CLI 入口，用于驱动运行时能力，而 CLI 层 MUST 通过应用层访问核心模块。
+
+#### Scenario: CLI 由独立二进制入口启动
+- **WHEN** 用户构建或启动 CLI 程序
+- **THEN** 系统 MUST 通过独立的 `cmd/cli` 入口启动 Cobra root command
+- **THEN** CLI 入口 MUST 只负责初始化配置和命令装配，而不直接承载核心业务逻辑
 
 #### Scenario: 使用 CLI 启动运行
 - **WHEN** 用户执行 `harness run`
@@ -128,6 +150,12 @@
 ### Requirement: 本地 HTTP API 入口
 系统 MUST 提供一个面向本机开发的 HTTP API 入口，用于复用现有应用层服务，而不改变核心运行时模型。
 
+#### Scenario: Web 服务由独立二进制入口启动
+- **WHEN** 用户构建或启动本地 Web 服务
+- **THEN** 系统 MUST 通过独立的 `cmd/web` 入口启动 HTTP server
+- **THEN** Web 入口 MUST 直接复用现有应用层服务与 HTTP 适配层
+- **THEN** 系统 MUST 不要求通过 CLI 子命令才能启动本地 Web 服务
+
 #### Scenario: 启动本地 API 服务
 - **WHEN** 用户执行本地 server 启动命令
 - **THEN** 系统 MUST 启动一个基于 `chi` 的 HTTP 服务
@@ -144,6 +172,12 @@
 - **WHEN** 客户端请求某个 `Run` 的 replay 或 events 数据
 - **THEN** 系统 MUST 提供摘要时间线接口
 - **THEN** 系统 MUST 提供原始事件接口
+
+#### Scenario: 查询工具列表时暴露扩展访问级别
+- **WHEN** 客户端请求工具列表
+- **THEN** 系统 MUST 返回所有已注册工具的结构化描述
+- **THEN** 每个工具描述 MUST 暴露访问级别
+- **THEN** 访问级别 MUST 至少支持 `read_only`、`write` 和 `exec`
 
 ### Requirement: 运行时 HTTP 操作接口
 系统 MUST 通过 HTTP API 暴露创建 run、恢复 run 和创建 session 的能力。

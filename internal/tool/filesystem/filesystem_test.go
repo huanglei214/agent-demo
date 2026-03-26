@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/huanglei214/agent-demo/internal/tool"
@@ -95,6 +97,90 @@ func TestSearchToolSuccess(t *testing.T) {
 	}
 }
 
+func TestSearchToolSupportsQueryAlias(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "alpha.txt"), []byte("hello world"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+
+	result, err := NewSearchTool(workspace).Execute(context.Background(), mustJSON(t, map[string]any{
+		"path":  ".",
+		"query": "hello",
+	}))
+	if err != nil {
+		t.Fatalf("search with query alias: %v", err)
+	}
+
+	if matches, ok := result.Content["matches"].([]map[string]any); ok {
+		if len(matches) != 1 {
+			t.Fatalf("unexpected matches: %#v", result.Content["matches"])
+		}
+	} else {
+		rawMatches, ok := result.Content["matches"].([]any)
+		if !ok || len(rawMatches) != 1 {
+			t.Fatalf("unexpected matches: %#v", result.Content["matches"])
+		}
+	}
+	if result.Content["pattern"] != "hello" {
+		t.Fatalf("expected normalized pattern, got %#v", result.Content["pattern"])
+	}
+}
+
+func TestSearchToolRejectsEmptyPattern(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "alpha.txt"), []byte("hello world"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+
+	_, err := NewSearchTool(workspace).Execute(context.Background(), mustJSON(t, map[string]any{
+		"path": ".",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "search pattern is required") {
+		t.Fatalf("expected empty pattern error, got %v", err)
+	}
+}
+
+func TestSearchToolTruncatesLargeResultSets(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	for index := 0; index < maxSearchMatches+10; index++ {
+		name := filepath.Join(workspace, "match-"+strconv.Itoa(index)+".txt")
+		if err := os.WriteFile(name, []byte("seed"), 0o644); err != nil {
+			t.Fatalf("seed file %d: %v", index, err)
+		}
+	}
+
+	result, err := NewSearchTool(workspace).Execute(context.Background(), mustJSON(t, map[string]any{
+		"path":    ".",
+		"pattern": "match-",
+	}))
+	if err != nil {
+		t.Fatalf("search with many matches: %v", err)
+	}
+
+	if matches, ok := result.Content["matches"].([]map[string]any); ok {
+		if len(matches) != maxSearchMatches {
+			t.Fatalf("expected %d matches, got %d", maxSearchMatches, len(matches))
+		}
+	} else {
+		rawMatches, ok := result.Content["matches"].([]any)
+		if !ok {
+			t.Fatalf("unexpected matches payload: %#v", result.Content["matches"])
+		}
+		if len(rawMatches) != maxSearchMatches {
+			t.Fatalf("expected %d matches, got %d", maxSearchMatches, len(rawMatches))
+		}
+	}
+	if result.Content["truncated"] != true {
+		t.Fatalf("expected truncated=true, got %#v", result.Content["truncated"])
+	}
+}
+
 func TestStatToolSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -112,6 +198,102 @@ func TestStatToolSuccess(t *testing.T) {
 
 	if result.Content["name"] != "meta.txt" {
 		t.Fatalf("unexpected stat payload: %#v", result.Content)
+	}
+}
+
+func TestStrReplaceToolReplacesSingleMatch(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	target := filepath.Join(workspace, "notes.txt")
+	if err := os.WriteFile(target, []byte("hello weather\nhello world\n"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+
+	result, err := NewStrReplaceTool(workspace).Execute(context.Background(), mustJSON(t, map[string]any{
+		"path":        "notes.txt",
+		"old_str":     "hello",
+		"new_str":     "hi",
+		"replace_all": false,
+	}))
+	if err != nil {
+		t.Fatalf("str_replace: %v", err)
+	}
+
+	updated, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read updated file: %v", err)
+	}
+	if string(updated) != "hi weather\nhello world\n" {
+		t.Fatalf("unexpected file content: %q", string(updated))
+	}
+	if result.Content["replaced"] != 1 {
+		t.Fatalf("expected one replacement, got %#v", result.Content)
+	}
+}
+
+func TestStrReplaceToolSupportsReplaceAll(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	target := filepath.Join(workspace, "notes.txt")
+	if err := os.WriteFile(target, []byte("hello weather\nhello world\n"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+
+	result, err := NewStrReplaceTool(workspace).Execute(context.Background(), mustJSON(t, map[string]any{
+		"path":        "notes.txt",
+		"old_str":     "hello",
+		"new_str":     "hi",
+		"replace_all": true,
+	}))
+	if err != nil {
+		t.Fatalf("str_replace replace_all: %v", err)
+	}
+
+	updated, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read updated file: %v", err)
+	}
+	if string(updated) != "hi weather\nhi world\n" {
+		t.Fatalf("unexpected file content: %q", string(updated))
+	}
+	if result.Content["replaced"] != 2 {
+		t.Fatalf("expected two replacements, got %#v", result.Content)
+	}
+}
+
+func TestStrReplaceToolRejectsMissingTarget(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	target := filepath.Join(workspace, "notes.txt")
+	if err := os.WriteFile(target, []byte("hello world\n"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+
+	_, err := NewStrReplaceTool(workspace).Execute(context.Background(), mustJSON(t, map[string]any{
+		"path":    "notes.txt",
+		"old_str": "weather",
+		"new_str": "sunny",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "old_str was not found") {
+		t.Fatalf("expected missing target error, got %v", err)
+	}
+}
+
+func TestStrReplaceToolRejectsOutsideWorkspace(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+
+	_, err := NewStrReplaceTool(workspace).Execute(context.Background(), mustJSON(t, map[string]any{
+		"path":    "../outside.txt",
+		"old_str": "hello",
+		"new_str": "hi",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "outside workspace") {
+		t.Fatalf("expected outside workspace error, got %v", err)
 	}
 }
 
@@ -179,11 +361,11 @@ func TestFileSystemToolAccessModes(t *testing.T) {
 	if got := NewSearchTool(workspace).AccessMode(); got != tool.AccessReadOnly {
 		t.Fatalf("expected search tool to be read_only, got %s", got)
 	}
-	if got := NewStatTool(workspace).AccessMode(); got != tool.AccessReadOnly {
-		t.Fatalf("expected stat tool to be read_only, got %s", got)
-	}
 	if got := NewWriteFileTool(workspace).AccessMode(); got != tool.AccessWrite {
 		t.Fatalf("expected write tool to be write, got %s", got)
+	}
+	if got := NewStrReplaceTool(workspace).AccessMode(); got != tool.AccessWrite {
+		t.Fatalf("expected str_replace tool to be write, got %s", got)
 	}
 }
 

@@ -45,9 +45,9 @@ func (s Services) ResumeRun(runID string) (RunResponse, error) {
 	case harnessruntime.RunBlocked:
 		return RunResponse{}, fmt.Errorf("run %s is blocked and requires manual intervention before resume", runID)
 	case harnessruntime.RunPending:
-		return s.executeRun(task, session, run, plan, state, true)
+		return s.executeRun(task, session, run, plan, state, true, nil)
 	case harnessruntime.RunRunning:
-		return s.executeRun(task, session, run, plan, state, false)
+		return s.executeRun(task, session, run, plan, state, false, nil)
 	default:
 		return RunResponse{}, fmt.Errorf("run %s is not resumable from status %s", runID, run.Status)
 	}

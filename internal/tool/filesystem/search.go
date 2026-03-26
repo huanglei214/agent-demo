@@ -3,6 +3,7 @@ package filesystem
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,8 @@ type SearchTool struct {
 	fs safeFS
 }
 
+const maxSearchMatches = 100
+
 func NewSearchTool(workspace string) SearchTool {
 	return SearchTool{fs: newSafeFS(workspace)}
 }
@@ -23,7 +26,7 @@ func (t SearchTool) Name() string {
 }
 
 func (t SearchTool) Description() string {
-	return "Search file paths or file contents inside the workspace."
+	return "Search workspace file paths or file contents by pattern or query, with capped results."
 }
 
 func (t SearchTool) AccessMode() tool.AccessMode {
@@ -36,9 +39,18 @@ func (t SearchTool) Execute(ctx context.Context, input json.RawMessage) (tool.Re
 	var req struct {
 		Path    string `json:"path"`
 		Pattern string `json:"pattern"`
+		Query   string `json:"query"`
 	}
 	if err := json.Unmarshal(input, &req); err != nil {
 		return tool.Result{}, err
+	}
+
+	pattern := strings.TrimSpace(req.Pattern)
+	if pattern == "" {
+		pattern = strings.TrimSpace(req.Query)
+	}
+	if pattern == "" {
+		return tool.Result{}, errors.New("search pattern is required")
 	}
 
 	root, err := t.fs.resolve(req.Path)
@@ -60,11 +72,14 @@ func (t SearchTool) Execute(ctx context.Context, input json.RawMessage) (tool.Re
 			return err
 		}
 
-		if strings.Contains(relative, req.Pattern) {
+		if strings.Contains(relative, pattern) {
 			matches = append(matches, map[string]any{
 				"path":  relative,
 				"match": "path",
 			})
+			if len(matches) >= maxSearchMatches {
+				return filepath.SkipAll
+			}
 			return nil
 		}
 
@@ -73,23 +88,27 @@ func (t SearchTool) Execute(ctx context.Context, input json.RawMessage) (tool.Re
 			return nil
 		}
 
-		if strings.Contains(string(data), req.Pattern) {
+		if strings.Contains(string(data), pattern) {
 			matches = append(matches, map[string]any{
 				"path":  relative,
 				"match": "content",
 			})
+			if len(matches) >= maxSearchMatches {
+				return filepath.SkipAll
+			}
 		}
 		return nil
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, filepath.SkipAll) {
 		return tool.Result{}, err
 	}
 
 	return tool.Result{
 		Content: map[string]any{
-			"path":    filepath.Clean(req.Path),
-			"pattern": req.Pattern,
-			"matches": matches,
+			"path":      filepath.Clean(req.Path),
+			"pattern":   pattern,
+			"matches":   matches,
+			"truncated": len(matches) >= maxSearchMatches,
 		},
 	}, nil
 }

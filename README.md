@@ -3,9 +3,10 @@
 本项目当前是一个单机本地运行的 Agent Harness MVP，已经具备：
 
 - Cobra CLI 入口
+- 独立的 `cmd/cli` 与 `cmd/web` 双入口
 - 本地 `.runtime/` 工件落盘
 - `run / chat / inspect / session inspect / replay / resume / tools list / debug events` 基础命令
-- 本地 `serve` 命令和首批 Web API
+- 本地 Web API 和首批调试 / 聊天页面
 - Ark / Mock provider
 - 最小 plan-driven loop：`planning -> memory recall -> context build -> prompt build -> model -> tool -> result`
 - 基于 `Session` 的本地多轮对话
@@ -51,6 +52,23 @@ make run ARGS='say hello from mock provider' PROVIDER=mock
 make tools
 ```
 
+当前默认核心工具面包括：
+
+- `fs.list_dir`：列出 workspace 内目录
+- `fs.read_file`：读取 workspace 内文件内容
+- `fs.write_file`：创建或整体覆盖 workspace 内文件
+- `fs.str_replace`：按字符串做局部替换，支持单次替换和多次替换
+- `fs.search`：按 `pattern` 或 `query` 在 workspace 内搜索路径或文件内容
+- `web.search`：联网搜索外部信息，返回结构化搜索结果
+- `web.fetch`：读取指定网页内容，返回结构化页面文本
+- `bash.exec`：在 workspace 内按受控参数执行命令
+
+工具访问级别当前分为：
+
+- `read_only`：只读工具，例如 `fs.list_dir`、`fs.read_file`、`fs.search`、`web.search`、`web.fetch`
+- `write`：写入工具，例如 `fs.write_file`、`fs.str_replace`
+- `exec`：执行工具，例如 `bash.exec`
+
 启动本地 HTTP API：
 
 ```bash
@@ -72,6 +90,14 @@ npm run dev
 ```
 
 默认情况下，Vite 会把 `/api` 和 `/healthz` 代理到 `http://127.0.0.1:8080`。
+
+当前入口分层如下：
+
+- `cmd/cli`：CLI 可执行入口
+- `cmd/web`：本地 Web API 可执行入口
+- `internal/app`、`internal/runtime`、`internal/planner` 等：核心应用与运行时能力
+- `internal/interfaces/cli`、`internal/interfaces/http`：当前阶段的接口适配层
+- `internal/interfaces/http/agui`：AG-UI 聊天流的 HTTP 适配
 
 查看某个 run：
 
@@ -207,6 +233,8 @@ make verify-scenarios
 - 发起 run
 - 在首页直接查看 recent sessions / recent runs，并点进详情页
 - 在首页选择某个 session 后直接查看最近消息和关联 runs，并继续追加一轮输入
+- 通过页面右上角切换中文 / 英文，默认保留本地语言偏好
+- 通过 `/chat` 进入 chat-first 页面，直接消费 AG-UI 事件流
 - 查看 session 消息和关联 run
 - 查看 run inspect、replay timeline、raw events
 - 在 run 详情页通过 SSE 订阅增量事件，实时刷新时间线和状态指标
@@ -228,13 +256,68 @@ make web-dev
 
 3. 打开 Vite 输出的本地地址，默认会进入：
 
-- `/`：Launchpad + recent sessions / recent runs
+- `/`：Chat-first 首页，直接消费 `/api/agui/chat`
+- `/launchpad`：旧的启动台和 recent sessions / recent runs
+- `/chat`：Chat-first 页面别名
 - `/sessions/<session-id>`：Session 详情页
 - `/runs/<run-id>`：Run 详情页
 
 `Run` 详情页在首屏会先加载一次 `inspect / replay / events`，随后自动连接 `/api/runs/<run-id>/stream?after=<sequence>`，用 SSE 追增量事件；当 run 进入 `completed / failed / cancelled / blocked` 时，这条连接会自动结束。
 
-这个 server 当前是单 workspace 绑定的：启动 `serve` 时绑定哪个 `--workspace`，HTTP API 就只接受该 workspace 下的 session/run 请求，不支持跨 workspace 复用。
+## AG-UI Chat Adapter
+
+当前项目额外提供了一条与调试 API 并存的 AG-UI 兼容聊天入口：
+
+```bash
+POST /api/agui/chat
+```
+
+这条入口的定位是“chat-first 实时体验”，而不是替换现有调试台：
+
+- `/api/agui/chat`：面向流式消息、step 和 tool call 的聊天体验
+- `/api/runs/*`、`/api/sessions/*`：面向 inspect、replay、raw events 和调试排障
+
+AG-UI 入口当前使用 HTTP + SSE 输出最小事件子集，包括：
+
+- `RUN_STARTED`
+- `MESSAGES_SNAPSHOT`
+- `STATE_SNAPSHOT`
+- `STEP_STARTED / STEP_FINISHED`
+- `TEXT_MESSAGE_START / CONTENT / END`
+- `TOOL_CALL_START / ARGS / END / RESULT`
+- `RUN_FINISHED / RUN_ERROR`
+- `CUSTOM / RAW`
+
+如果你只是要排查 run 行为，继续优先使用现有调试页和 `inspect / replay / debug events` 即可；如果你要做新的 chat-first 页面，再接 `/api/agui/chat`。
+
+这个 server 当前是单 workspace 绑定的：启动 `cmd/web` 时绑定哪个 `--workspace`，HTTP API 就只接受该 workspace 下的 session/run 请求，不支持跨 workspace 复用。
+
+## 工具说明
+
+CLI、Web UI 和 AG-UI 运行时当前共享同一套工具注册表，核心工具面固定为 8 个：
+
+- `fs.list_dir`
+- `fs.read_file`
+- `fs.write_file`
+- `fs.str_replace`
+- `fs.search`
+- `web.search`
+- `web.fetch`
+- `bash.exec`
+
+`fs.stat` 已经从默认工具注册表中移除，不再对模型暴露。工具清单可以通过：
+
+```bash
+make tools
+```
+
+或：
+
+```bash
+curl -s http://127.0.0.1:8080/api/tools
+```
+
+查看。HTTP `/api/tools` 返回的工具描述中会同时暴露 `access` 字段，当前值为 `read_only | write | exec`。
 
 ## `.runtime` 工件说明
 

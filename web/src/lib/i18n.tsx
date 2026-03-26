@@ -25,6 +25,7 @@ type Dictionary = {
     title: string;
     lede: string;
     navLaunchpad: string;
+    navChat: string;
     navSession: string;
     navRun: string;
     routingNotesTitle: string;
@@ -37,6 +38,7 @@ type Dictionary = {
     };
     paths: {
       home: string;
+      chat: string;
       session: string;
       run: string;
       api: string;
@@ -130,6 +132,56 @@ type Dictionary = {
     };
     status: Record<string, string>;
   };
+  chat: {
+    title: string;
+    body: string;
+    headerTitle: string;
+    sidebarTitle: string;
+    newChat: string;
+    currentSession: string;
+    currentRun: string;
+    quickPromptTitle: string;
+    quickPromptInspect: string;
+    quickPromptDebug: string;
+    quickPromptSummarize: string;
+    historyTitle: string;
+    historyToday: string;
+    historyThisWeek: string;
+    historyOlder: string;
+    refreshHistory: string;
+    noHistory: string;
+    drawerTitle: string;
+    activityDrawerToggle: string;
+    emptyKicker: string;
+    emptyTitle: string;
+    emptyBody: string;
+    lastPromptLabel: string;
+    sessionId: string;
+    sessionPlaceholder: string;
+    provider: string;
+    model: string;
+    maxTurns: string;
+    prompt: string;
+    promptPlaceholder: string;
+    send: string;
+    sending: string;
+    newSessionHint: string;
+    messagesTitle: string;
+    activityTitle: string;
+    stateTitle: string;
+    emptyMessages: string;
+    emptyActivity: string;
+    failureTitle: string;
+    failureHint: string;
+    eventCount: string;
+    threadLabel: string;
+    runLabel: string;
+    streamStatus: string;
+    live: string;
+    idle: string;
+    finished: string;
+    failed: string;
+  };
   messages: {
     role: Record<"user" | "assistant", string>;
   };
@@ -163,6 +215,7 @@ const dictionaries: Record<Language, Dictionary> = {
       title: "Runtime cockpit for sessions, runs, and event traces.",
       lede: "Start runs, inspect session history, and drill into replay timelines without leaving the browser.",
       navLaunchpad: "Launchpad",
+      navChat: "Chat",
       navSession: "Session view",
       navRun: "Run view",
       routingNotesTitle: "Routing notes",
@@ -176,6 +229,7 @@ const dictionaries: Record<Language, Dictionary> = {
       },
       paths: {
         home: "/",
+        chat: "/chat",
         session: "/sessions/<session-id>",
         run: "/runs/<run-id>",
         api: "/api/* via Vite proxy -> 127.0.0.1:8080",
@@ -277,6 +331,56 @@ const dictionaries: Record<Language, Dictionary> = {
         cancelled: "cancelled",
       },
     },
+    chat: {
+      title: "Chat-first playground",
+      body: "Use the AG-UI adapter to stream one conversation turn at a time while keeping the existing debug APIs for deeper inspection.",
+      headerTitle: "Agent Chat",
+      sidebarTitle: "Workspace Chat",
+      newChat: "New chat",
+      currentSession: "Current session",
+      currentRun: "Current run",
+      quickPromptTitle: "Quick prompts",
+      quickPromptInspect: "Inspect the current repository and highlight risky areas.",
+      quickPromptDebug: "Help me debug the latest regression in this project.",
+      quickPromptSummarize: "Summarize what has been completed in this repository.",
+      historyTitle: "Recent sessions",
+      historyToday: "Today",
+      historyThisWeek: "Last 7 days",
+      historyOlder: "Older",
+      refreshHistory: "Refresh",
+      noHistory: "No recent sessions yet.",
+      drawerTitle: "Context and activity",
+      activityDrawerToggle: "Activity",
+      emptyKicker: "AG-UI connected",
+      emptyTitle: "What should we work on next?",
+      emptyBody: "Use the chat surface as the primary way to talk to the harness. Steps and tool activity stay visible without taking over the screen.",
+      lastPromptLabel: "Last prompt",
+      sessionId: "Session ID",
+      sessionPlaceholder: "Leave empty to let the server create a session.",
+      provider: "Provider",
+      model: "Model",
+      maxTurns: "Max turns",
+      prompt: "Message",
+      promptPlaceholder: "Ask the agent to inspect code, explain a bug, or summarize the repo.",
+      send: "Send message",
+      sending: "Streaming...",
+      newSessionHint: "This page talks to /api/agui/chat and will keep the latest thread / run ids once the stream starts.",
+      messagesTitle: "Messages",
+      activityTitle: "Live activity",
+      stateTitle: "Latest state",
+      emptyMessages: "No messages yet. Send one to start the stream.",
+      emptyActivity: "No activity events yet.",
+      failureTitle: "Latest failure",
+      failureHint: "Check the terminal output for [api] logs if you need the backend trace.",
+      eventCount: "events",
+      threadLabel: "thread",
+      runLabel: "run",
+      streamStatus: "stream",
+      live: "live",
+      idle: "idle",
+      finished: "finished",
+      failed: "failed",
+    },
     messages: {
       role: {
         user: "user",
@@ -300,6 +404,7 @@ const dictionaries: Record<Language, Dictionary> = {
       title: "在浏览器里查看会话、运行和事件轨迹的控制台。",
       lede: "直接在浏览器里发起运行、查看会话历史，并沿着 replay 时间线排查执行过程。",
       navLaunchpad: "启动台",
+      navChat: "聊天页",
       navSession: "会话页",
       navRun: "运行页",
       routingNotesTitle: "路由说明",
@@ -312,6 +417,7 @@ const dictionaries: Record<Language, Dictionary> = {
       },
       paths: {
         home: "/",
+        chat: "/chat",
         session: "/sessions/<session-id>",
         run: "/runs/<run-id>",
         api: "/api/* 通过 Vite 代理到 127.0.0.1:8080",
@@ -412,6 +518,56 @@ const dictionaries: Record<Language, Dictionary> = {
         completed: "已完成",
         cancelled: "已取消",
       },
+    },
+    chat: {
+      title: "聊天实验页",
+      body: "这里直接走 AG-UI adapter，以聊天视角实时展示消息、步骤和工具调用；更深的排障仍然交给现有调试页。",
+      headerTitle: "Agent 对话",
+      sidebarTitle: "工作区聊天",
+      newChat: "新对话",
+      currentSession: "当前会话",
+      currentRun: "当前运行",
+      quickPromptTitle: "快捷问题",
+      quickPromptInspect: "检查当前仓库，并指出最值得关注的风险点。",
+      quickPromptDebug: "帮我排查这个项目里最新出现的回归问题。",
+      quickPromptSummarize: "总结这个仓库目前已经完成了哪些工作。",
+      historyTitle: "最近会话",
+      historyToday: "今天",
+      historyThisWeek: "近 7 天",
+      historyOlder: "更早",
+      refreshHistory: "刷新",
+      noHistory: "还没有最近会话。",
+      drawerTitle: "上下文与活动",
+      activityDrawerToggle: "活动抽屉",
+      emptyKicker: "AG-UI 已连接",
+      emptyTitle: "接下来我们做什么？",
+      emptyBody: "把这里当成主聊天界面来用。步骤变化和工具活动会保留，但不会再把整屏都挤满。",
+      lastPromptLabel: "上一条问题",
+      sessionId: "会话 ID",
+      sessionPlaceholder: "留空会由服务端自动创建一个会话。",
+      provider: "Provider",
+      model: "模型",
+      maxTurns: "最大轮数",
+      prompt: "消息",
+      promptPlaceholder: "让 agent 检查代码、解释 bug，或者总结仓库状态。",
+      send: "发送消息",
+      sending: "流式返回中...",
+      newSessionHint: "这个页面会直接请求 /api/agui/chat，并在流开始后记住最新的 thread / run 标识。",
+      messagesTitle: "消息流",
+      activityTitle: "实时活动",
+      stateTitle: "最新状态",
+      emptyMessages: "还没有消息，先发一条开始。",
+      emptyActivity: "还没有活动事件。",
+      failureTitle: "最近错误",
+      failureHint: "如果需要后端堆栈或请求细节，请查看终端里的 [api] 日志。",
+      eventCount: "个事件",
+      threadLabel: "线程",
+      runLabel: "运行",
+      streamStatus: "流状态",
+      live: "实时中",
+      idle: "空闲",
+      finished: "已完成",
+      failed: "失败",
     },
     messages: {
       role: {

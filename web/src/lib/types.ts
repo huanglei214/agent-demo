@@ -199,3 +199,46 @@ export type SessionsResponse = {
 export type RunsResponse = {
   runs: RunListItem[];
 };
+
+export type AGUIChatRequest = {
+  threadId?: string;
+  runId?: string;
+  messages: Array<{
+    id: string;
+    role: "user" | "assistant";
+    content: string;
+  }>;
+  state: {
+    workspace?: string;
+    provider?: string;
+    model?: string;
+    maxTurns?: number;
+  };
+  context?: Record<string, unknown>;
+};
+
+export type AGUIMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+};
+
+export type AGUIEvent = {
+  type: string;
+  threadId?: string;
+  runId?: string;
+  messageId?: string;
+  role?: string;
+  delta?: string;
+  stepId?: string;
+  stepName?: string;
+  toolCallId?: string;
+  toolName?: string;
+  args?: unknown;
+  result?: unknown;
+  messages?: AGUIMessage[];
+  snapshot?: Record<string, unknown>;
+  name?: string;
+  value?: unknown;
+  error?: string;
+};

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -364,7 +365,7 @@ func TestExecuteRunMarksFailedRunAndPlanStepOnModelError(t *testing.T) {
 		UpdatedAt: now,
 	}
 
-	if _, err := services.executeRun(task, session, run, plan, state, true); err == nil {
+	if _, err := services.executeRun(task, session, run, plan, state, true, nil); err == nil {
 		t.Fatal("expected executeRun to fail")
 	}
 
@@ -400,6 +401,160 @@ func TestExecuteRunMarksFailedRunAndPlanStepOnModelError(t *testing.T) {
 	}
 	if failedEvent.Payload["retryable"] != true {
 		t.Fatalf("expected retryable failure, got %#v", failedEvent.Payload)
+	}
+}
+
+func TestExecuteRunRecordsStructuredToolFailureDetails(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+	cfg := config.Load(workspace)
+	services := NewServices(cfg)
+	services.ModelFactory = func() (model.Model, error) {
+		return staticActionModel{
+			response: model.Action{
+				Action: "tool",
+				Tool:   "bash.exec",
+				Input: map[string]any{
+					"command":         "sleep 2",
+					"workdir":         ".",
+					"timeout_seconds": 1,
+				},
+			},
+		}, nil
+	}
+
+	now := time.Now()
+	task, session, run, plan, state := seedStoredRun(t, services, workspace, now, harnessruntime.RunPending, "run_tool_timeout")
+	task.Instruction = "Run a command that times out"
+	plan.Goal = task.Instruction
+	plan.Steps[0].Description = task.Instruction
+	if err := services.StateStore.SaveTask(task); err != nil {
+		t.Fatalf("resave task: %v", err)
+	}
+	if err := services.StateStore.SavePlan(plan); err != nil {
+		t.Fatalf("resave plan: %v", err)
+	}
+
+	if _, err := services.executeRun(task, session, run, plan, state, true, nil); err == nil {
+		t.Fatal("expected timeout run to fail")
+	}
+
+	replayed, err := services.ReplayRun(run.ID)
+	if err != nil {
+		t.Fatalf("replay failed run: %v", err)
+	}
+
+	var failedEvent *harnessruntime.Event
+	for i := range replayed {
+		if replayed[i].Type == "tool.failed" {
+			failedEvent = &replayed[i]
+			break
+		}
+	}
+	if failedEvent == nil {
+		t.Fatalf("expected tool.failed event in %#v", replayed)
+	}
+	details, ok := failedEvent.Payload["details"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured details, got %#v", failedEvent.Payload)
+	}
+	if details["timed_out"] != true {
+		t.Fatalf("expected timed_out details, got %#v", details)
+	}
+}
+
+func TestStartRunStreamObserverReceivesLifecycleEvents(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	cfg := config.Load(workspace)
+	cfg.Workspace = workspace
+	cfg.Runtime.Root = filepath.Join(workspace, ".runtime")
+	cfg.Model.Provider = "mock"
+	cfg.Model.Model = "mock-model"
+
+	services := NewServices(cfg)
+	observer := &captureRunObserver{}
+
+	response, err := services.StartRunStream(RunRequest{
+		Instruction: "Summarize the repository in one short paragraph",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    4,
+	}, observer)
+	if err != nil {
+		t.Fatalf("expected run to succeed, got %v", err)
+	}
+	if response.Result == nil {
+		t.Fatalf("expected run result, got %#v", response)
+	}
+	if !observer.hasEvent("run.started") {
+		t.Fatalf("expected observer to receive run.started, got %#v", observer.types())
+	}
+	if !observer.hasEvent("assistant.message") {
+		t.Fatalf("expected observer to receive assistant.message, got %#v", observer.types())
+	}
+	if !observer.hasEvent("run.completed") {
+		t.Fatalf("expected observer to receive run.completed, got %#v", observer.types())
+	}
+}
+
+func TestStartRunAllowsFollowUpToolCallBeforeFinalAnswer(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "weather.txt"), []byte("Wuhan weather: cloudy 22C"), 0o644); err != nil {
+		t.Fatalf("seed weather file: %v", err)
+	}
+
+	cfg := config.Load(workspace)
+	services := NewServices(cfg)
+	services.ModelFactory = func() (model.Model, error) {
+		return &actionSequenceModel{
+			responses: []model.Action{
+				{
+					Action: "tool",
+					Tool:   "fs.search",
+					Input: map[string]any{
+						"query": "weather.txt",
+					},
+				},
+				{
+					Action: "tool",
+					Tool:   "fs.read_file",
+					Input: map[string]any{
+						"path": "weather.txt",
+					},
+				},
+				{
+					Action: "final",
+					Answer: "Wuhan weather is cloudy and 22C.",
+				},
+			},
+		}, nil
+	}
+
+	response, err := services.StartRun(RunRequest{
+		Instruction: "武汉天气怎么样",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    5,
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	if response.Result == nil || response.Result.Output != "Wuhan weather is cloudy and 22C." {
+		t.Fatalf("unexpected result: %#v", response.Result)
+	}
+
+	events, err := services.ReplayRun(response.Run.ID)
+	if err != nil {
+		t.Fatalf("replay run: %v", err)
+	}
+	if got := countEventType(events, "tool.called"); got != 2 {
+		t.Fatalf("expected two tool calls, got %#v", events)
 	}
 }
 
@@ -619,6 +774,31 @@ func countEventType(events []harnessruntime.Event, eventType string) int {
 	return count
 }
 
+type captureRunObserver struct {
+	events []harnessruntime.Event
+}
+
+func (o *captureRunObserver) OnRuntimeEvent(event harnessruntime.Event) {
+	o.events = append(o.events, event)
+}
+
+func (o *captureRunObserver) hasEvent(eventType string) bool {
+	for _, event := range o.events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+func (o *captureRunObserver) types() []string {
+	result := make([]string, 0, len(o.events))
+	for _, event := range o.events {
+		result = append(result, event.Type)
+	}
+	return result
+}
+
 type staticActionModel struct {
 	response model.Action
 }
@@ -763,4 +943,23 @@ func seedStoredRun(t *testing.T, services Services, workspace string, now time.T
 	}
 
 	return task, session, run, plan, state
+}
+
+type actionSequenceModel struct {
+	responses []model.Action
+	index     int
+}
+
+func (m *actionSequenceModel) Generate(ctx context.Context, req model.Request) (model.Response, error) {
+	_ = ctx
+	_ = req
+	if m.index >= len(m.responses) {
+		return model.Response{}, errors.New("scripted model exhausted")
+	}
+	data, _ := json.Marshal(m.responses[m.index])
+	m.index++
+	return model.Response{
+		Text:         string(data),
+		FinishReason: "stop",
+	}, nil
 }

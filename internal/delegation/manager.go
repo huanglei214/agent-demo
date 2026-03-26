@@ -37,7 +37,7 @@ func NewManager(paths store.Paths, options ...Option) Manager {
 	policy := Policy{
 		MaxDepth:     2,
 		MaxChildren:  2,
-		AllowedTools: []string{"fs.read_file", "fs.list_dir", "fs.search", "fs.stat"},
+		AllowedTools: []string{"fs.read_file", "fs.list_dir", "fs.search"},
 	}
 	for _, option := range options {
 		option(&policy)
