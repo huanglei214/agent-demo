@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
@@ -40,7 +41,7 @@ func (s Services) ListSessions(limit int) ([]SessionListItem, error) {
 
 	items := make([]SessionListItem, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
 		session, err := s.StateStore.LoadSession(entry.Name())
@@ -77,7 +78,7 @@ func (s Services) ListRuns(limit int) ([]RunListItem, error) {
 
 	items := make([]RunListItem, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
 		run, err := s.StateStore.LoadRun(entry.Name())

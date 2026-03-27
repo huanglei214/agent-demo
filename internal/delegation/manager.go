@@ -60,6 +60,9 @@ func (m Manager) CanDelegate(_ context.Context, run harnessruntime.Run, step har
 	if !step.Delegatable {
 		return false, "step_not_delegatable"
 	}
+	if run.Role == harnessruntime.RunRoleSubagent {
+		return false, "subagent_cannot_delegate"
+	}
 	currentDepth, err := m.depth(run)
 	if err != nil {
 		return false, "depth_lookup_failed"
@@ -75,28 +78,31 @@ func (m Manager) CanDelegate(_ context.Context, run harnessruntime.Run, step har
 }
 
 func (m Manager) BuildTask(parentRun harnessruntime.Run, plan harnessruntime.Plan, step harnessruntime.PlanStep, goal string, memories []harnessruntime.MemoryEntry, summaries []harnessruntime.Summary) harnessruntime.DelegationTask {
-	memorySnippets := make([]string, 0, len(memories))
-	for _, entry := range memories {
-		memorySnippets = append(memorySnippets, entry.Content)
-	}
-	summarySnippets := make([]string, 0, len(summaries))
-	for _, summary := range summaries {
-		summarySnippets = append(summarySnippets, summary.Content)
-	}
-
+	_ = plan
+	_ = memories
+	_ = summaries
 	return harnessruntime.DelegationTask{
 		ID:            harnessruntime.NewID("delegation"),
 		ParentRunID:   parentRun.ID,
 		SessionID:     parentRun.SessionID,
 		PlanStepID:    step.ID,
+		Role:          harnessruntime.RunRoleSubagent,
 		Goal:          strings.TrimSpace(goal),
 		AllowedTools:  append([]string{}, m.policy.AllowedTools...),
-		ParentGoal:    plan.Goal,
 		StepTitle:     step.Title,
 		StepDesc:      step.Description,
-		Constraints:   []string{"child run must return structured summary", "child run cannot write long-term memory directly"},
-		ContextMemory: append(memorySnippets, summarySnippets...),
-		CreatedAt:     time.Now(),
+		Constraints: []string{
+			"child run must operate as a constrained subagent",
+			"child run must return a structured result object with summary, artifacts, findings, risks, recommendations, and needs_replan",
+			"child run cannot answer the end user directly",
+			"child run cannot write long-term memory directly",
+		},
+		CompletionCriteria: []string{
+			"stay within the delegated goal and allowed tools",
+			"return a structured result with summary, artifacts, findings, risks, recommendations, and needs_replan",
+		},
+		TaskLocalContext: []string{},
+		CreatedAt:        time.Now(),
 	}
 }
 
@@ -112,6 +118,9 @@ func (m Manager) ListChildren(parentRunID string) ([]ChildRecord, error) {
 
 	result := make([]ChildRecord, 0, len(entries))
 	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
 		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
 		if err != nil {
 			return nil, err

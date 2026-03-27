@@ -1,9 +1,4 @@
-# subagent-delegation
-
-## Purpose
-定义 Harness 平台中受控的 child run delegation 机制，包括委派约束、最小上下文、结果结构化返回和主运行合并流程。
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: 受控的子代理委派
 系统 MUST 支持主 `Run` 将特定子任务以 child run 的形式委派给子代理执行，并保持父子运行关系可追踪。被委派的 child `Run` MUST 以 `subagent` 角色运行，而主 `Run` MUST 保持 `lead-agent` 角色并继续对最终答案负责。
@@ -15,48 +10,6 @@
 - **THEN** 该 child `Run` MUST 以 `subagent` 角色执行
 - **THEN** 主 `Run` MUST 保持 `lead-agent` 角色，不将最终用户答复责任转移给 child `Run`
 - **THEN** 系统 MUST 记录 `subagent.spawned` 事件
-
-### Requirement: 委派必须绑定计划步骤
-系统 MUST 仅允许围绕明确的 `PlanStep` 进行委派，不能创建与计划无关的开放式子代理任务。
-
-#### Scenario: 绑定计划步骤发起委派
-- **WHEN** 主 `Run` 发起一次委派
-- **THEN** 该委派 MUST 关联到一个明确的 `PlanStep`
-- **THEN** 系统 MUST 记录该 `PlanStep` 与 child `Run` 的映射关系
-
-### Requirement: 子代理上下文最小化
-系统 MUST 向 child `Run` 传递最小充分上下文，而不是完整复制父运行的全部上下文。
-
-#### Scenario: 构建子代理上下文
-- **WHEN** 系统为 child `Run` 准备执行上下文
-- **THEN** 输入 MUST 至少围绕当前 delegation task 的 `goal`、`allowed_tools`、`constraints` 与 `completion_criteria`
-- **THEN** 系统 MAY 提供少量与当前子任务直接相关的 task-local context
-- **THEN** 系统 MUST 不将无关的完整历史上下文默认注入 child `Run`
-
-#### Scenario: 子代理不接收父运行会话与父目标
-- **WHEN** 系统为一次 child `Run` 构建输入
-- **THEN** 系统 MUST 不默认传递主 `Run` 的完整 `Conversation History`
-- **THEN** 系统 MUST 不默认传递 `parent_goal`
-- **THEN** 系统 MUST 不将用户原始多轮问题直接作为 child `Run` 的主要 instruction
-
-### Requirement: 子代理执行边界控制
-系统 MUST 对子代理的执行深度、并发数和工具权限施加限制。
-
-#### Scenario: 超过最大委派深度
-- **WHEN** 一次新的委派会导致委派深度超过预设上限
-- **THEN** 系统 MUST 拒绝该委派请求
-- **THEN** 系统 MUST 记录 `subagent.rejected` 事件
-
-#### Scenario: 子代理使用未授权工具
-- **WHEN** child `Run` 尝试调用未被允许的工具
-- **THEN** 系统 MUST 拒绝该工具调用
-- **THEN** 系统 MUST 返回结构化错误结果
-- **THEN** 系统 MUST 记录 `subagent.rejected` 事件
-
-#### Scenario: 子代理默认仅获得只读工具
-- **WHEN** 系统为 child `Run` 构建委派任务
-- **THEN** `allowed_tools` MUST 从已注册工具中的只读工具集合推导得到
-- **THEN** 系统 MUST 默认排除写入类工具
 
 ### Requirement: 子代理结果摘要
 系统 MUST 要求 child `Run` 返回结构化摘要，以供主 `Run` 汇总和继续执行。该结构化摘要 MUST 服务于 `lead-agent` 的结果整合，而不是替代主运行向用户给出最终答复。
@@ -74,26 +27,7 @@
 - **THEN** 结果 MUST 包含 `artifacts`、`findings`、`risks`、`recommendations` 数组字段，即使这些数组为空
 - **THEN** 系统 MUST 不接受仅包含自由文本最终答复且缺少结构化字段的 child 结果
 
-### Requirement: 主运行结果合并
-系统 MUST 支持主 `Run` 收集 child `Run` 的结果，并将其合并回当前执行过程。
-
-#### Scenario: 合并子代理结果
-- **WHEN** 一个或多个 child `Run` 已返回结果摘要
-- **THEN** 系统 MUST 将这些摘要结果提供给主 `Run`
-- **THEN** 主 `Run` MUST 能够基于这些结果继续执行、更新计划或输出最终结果
-
-#### Scenario: 子代理结果触发主运行重规划
-- **WHEN** child `Run` 返回结构化结果，并且 `needs_replan=true`
-- **THEN** 主 `Run` MUST 在继续后续推理前评估是否需要更新当前 `Plan`
-- **THEN** 当结果包含可消费信号时，主 `Run` MUST 记录 `plan.updated` 事件
-
-### Requirement: 长期记忆写入由主运行控制
-系统 MUST 防止 child `Run` 直接修改长期记忆，长期记忆写入应由主 `Run` 或统一的记忆管理流程控制。
-
-#### Scenario: 子代理产生长期记忆候选
-- **WHEN** child `Run` 生成了可能具有长期价值的信息
-- **THEN** 系统 MUST 将其作为候选结果返回给主 `Run` 或记忆管理流程
-- **THEN** child `Run` MUST 不直接提交该信息到长期记忆存储
+## ADDED Requirements
 
 ### Requirement: 子代理角色约束必须被显式注入
 系统 MUST 在 delegated child run 的 prompt 构建中显式注入 `subagent` 角色约束，而不能只依赖零散的补充 constraint 文本来约束 child 行为。

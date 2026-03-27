@@ -18,14 +18,15 @@ func (p Provider) Generate(ctx context.Context, req model.Request) (model.Respon
 	_ = ctx
 
 	lower := strings.ToLower(req.Input)
-	if strings.Contains(req.Input, "Parent goal:") && !strings.Contains(req.Input, "Tool result:") {
+	role, _ := req.Metadata["role"].(string)
+	if role == "subagent" {
 		needsReplan := strings.Contains(lower, "replan") || strings.Contains(req.Input, "重规划") || strings.Contains(req.Input, "重新规划")
 		return encodeAction(model.Action{
 			Action: "final",
 			Answer: delegationJSON(needsReplan),
 		}), nil
 	}
-	if strings.Contains(req.Input, "Tool result:") {
+	if strings.Contains(req.Input, "Tool result:") || strings.Contains(req.Input, "New tool results:") {
 		return encodeAction(model.Action{
 			Action: "final",
 			Answer: "I used the requested tool and summarized the result successfully.",
@@ -33,8 +34,7 @@ func (p Provider) Generate(ctx context.Context, req model.Request) (model.Respon
 	}
 
 	switch {
-	case (strings.Contains(lower, "delegate") || strings.Contains(lower, "委派") || strings.Contains(lower, "子任务")) &&
-		!strings.Contains(req.Input, "Parent goal:"):
+	case strings.Contains(lower, "delegate") || strings.Contains(lower, "委派") || strings.Contains(lower, "子任务"):
 		return encodeAction(model.Action{
 			Action:         "delegate",
 			DelegationGoal: "Inspect the repository files needed for the requested task and return a concise structured summary.",
@@ -42,18 +42,22 @@ func (p Provider) Generate(ctx context.Context, req model.Request) (model.Respon
 	case strings.Contains(lower, "readme"):
 		return encodeAction(model.Action{
 			Action: "tool",
-			Tool:   "fs.read_file",
-			Input: map[string]any{
-				"path": "README.md",
-			},
+			Calls: []model.ToolCall{{
+				Tool: "fs.read_file",
+				Input: map[string]any{
+					"path": "README.md",
+				},
+			}},
 		}), nil
 	case strings.Contains(lower, "列出") || strings.Contains(lower, "list"):
 		return encodeAction(model.Action{
 			Action: "tool",
-			Tool:   "fs.list_dir",
-			Input: map[string]any{
-				"path": ".",
-			},
+			Calls: []model.ToolCall{{
+				Tool: "fs.list_dir",
+				Input: map[string]any{
+					"path": ".",
+				},
+			}},
 		}), nil
 	default:
 		return encodeAction(model.Action{

@@ -11,6 +11,7 @@ import (
 
 type InspectChildRunSummary struct {
 	RunID       string                   `json:"run_id"`
+	Role        harnessruntime.RunRole   `json:"role,omitempty"`
 	Status      harnessruntime.RunStatus `json:"status"`
 	Summary     string                   `json:"summary"`
 	NeedsReplan bool                     `json:"needs_replan"`
@@ -28,16 +29,17 @@ type InspectModelCallSummary struct {
 }
 
 type InspectResponse struct {
-	Run            harnessruntime.Run        `json:"run"`
-	Plan           harnessruntime.Plan       `json:"plan"`
-	State          harnessruntime.RunState   `json:"state"`
-	Result         *harnessruntime.RunResult `json:"result,omitempty"`
-	CurrentStep    *harnessruntime.PlanStep  `json:"current_step,omitempty"`
-	RecentFailure  *harnessruntime.Event     `json:"recent_failure,omitempty"`
-	ChildRuns      []InspectChildRunSummary  `json:"child_runs"`
-	EventCount     int                       `json:"event_count"`
-	ModelCallCount int                       `json:"model_call_count"`
-	ModelCalls     []InspectModelCallSummary `json:"model_calls"`
+        Run            harnessruntime.Run         `json:"run"`
+        Plan           harnessruntime.Plan        `json:"plan"`
+        State          harnessruntime.RunState    `json:"state"`
+        Result         *harnessruntime.RunResult  `json:"result,omitempty"`
+        CurrentStep    *harnessruntime.PlanStep   `json:"current_step,omitempty"`
+        RecentFailure  *harnessruntime.Event      `json:"recent_failure,omitempty"`
+        ChildRuns      []InspectChildRunSummary   `json:"child_runs"`
+        EventCount     int                        `json:"event_count"`
+        ModelCallCount int                        `json:"model_call_count"`
+        ModelCalls     []harnessruntime.ModelCall `json:"model_calls"`
+        Events         []harnessruntime.Event     `json:"events"`
 }
 
 func (s Services) InspectRun(runID string) (InspectResponse, error) {
@@ -78,6 +80,7 @@ func (s Services) InspectRun(runID string) (InspectResponse, error) {
 	for _, child := range childRuns {
 		childSummaries = append(childSummaries, InspectChildRunSummary{
 			RunID:       child.Run.ID,
+			Role:        child.Run.Role,
 			Status:      child.Run.Status,
 			Summary:     child.Result.Summary,
 			NeedsReplan: child.Result.NeedsReplan,
@@ -88,22 +91,6 @@ func (s Services) InspectRun(runID string) (InspectResponse, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return InspectResponse{}, err
 	}
-	modelCallSummaries := make([]InspectModelCallSummary, 0, len(modelCalls))
-	for _, call := range modelCalls {
-		summary := InspectModelCallSummary{
-			Sequence:  call.Sequence,
-			Phase:     call.Phase,
-			Tool:      call.Tool,
-			Errored:   strings.TrimSpace(call.Error) != "",
-			Error:     call.Error,
-			Timestamp: call.Timestamp,
-		}
-		if call.Response != nil {
-			summary.FinishReason = call.Response.FinishReason
-		}
-		modelCallSummaries = append(modelCallSummaries, summary)
-	}
-
 	return InspectResponse{
 		Run:            run,
 		Plan:           plan,
@@ -114,7 +101,8 @@ func (s Services) InspectRun(runID string) (InspectResponse, error) {
 		ChildRuns:      childSummaries,
 		EventCount:     len(events),
 		ModelCallCount: len(modelCalls),
-		ModelCalls:     modelCallSummaries,
+		ModelCalls:     modelCalls,
+		Events:         events,
 	}, nil
 }
 

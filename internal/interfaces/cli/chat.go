@@ -22,6 +22,7 @@ func newChatCommand(ctx *commandContext) *cobra.Command {
 		maxTurns  int
 		sessionID string
 		skillName string
+		debugMode bool
 	)
 
 	cmd := &cobra.Command{
@@ -65,11 +66,19 @@ func newChatCommand(ctx *commandContext) *cobra.Command {
 						Skill:       skillName,
 					})
 					if err != nil {
+						if debugMode {
+							if runID, runErr := latestSessionRunID(services, sessionID); runErr == nil && runID != "" {
+								fmt.Fprintf(output, "run_id: %s\n", runID)
+							}
+						}
 						if rendered, renderErr := renderLatestChatFailure(services, sessionID); renderErr == nil && rendered != "" {
 							fmt.Fprintln(errorOutput, rendered)
 							return nil
 						}
 						return err
+					}
+					if debugMode {
+						fmt.Fprintf(output, "run_id: %s\n", response.Run.ID)
 					}
 					if response.Result != nil {
 						fmt.Fprintf(output, "assistant> %s\n", response.Result.Output)
@@ -84,6 +93,7 @@ func newChatCommand(ctx *commandContext) *cobra.Command {
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 20, "Maximum model turns for each chat round")
 	cmd.Flags().StringVar(&sessionID, "session", "", "Continue an existing session")
 	cmd.Flags().StringVar(&skillName, "skill", "", "Activate a named skill for each chat round")
+	cmd.Flags().BoolVar(&debugMode, "debug", false, "Print per-round debug information such as run IDs")
 	return cmd
 }
 
@@ -374,6 +384,17 @@ func renderLatestChatFailure(services app.Services, sessionID string) (string, e
 		return "", nil
 	}
 	return formatChatFailure(*inspect.RecentFailure), nil
+}
+
+func latestSessionRunID(services app.Services, sessionID string) (string, error) {
+	sessionInfo, err := services.InspectSession(sessionID, 1)
+	if err != nil {
+		return "", err
+	}
+	if len(sessionInfo.Runs) == 0 {
+		return "", nil
+	}
+	return sessionInfo.Runs[0].RunID, nil
 }
 
 func formatChatFailure(event harnessruntime.Event) string {

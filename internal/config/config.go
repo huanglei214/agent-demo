@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 type Config struct {
@@ -16,9 +17,10 @@ type RuntimeConfig struct {
 }
 
 type ModelConfig struct {
-	Provider string
-	Model    string
-	Ark      ArkConfig
+	Provider       string
+	Model          string
+	TimeoutSeconds int
+	Ark            ArkConfig
 }
 
 type ArkConfig struct {
@@ -41,8 +43,9 @@ func Load(workspace string) Config {
 			Root: filepath.Join(workspace, ".runtime"),
 		},
 		Model: ModelConfig{
-			Provider: defaultValue(os.Getenv("HARNESS_PROVIDER"), "ark"),
-			Model:    defaultValue(os.Getenv("HARNESS_MODEL"), os.Getenv("ARK_MODEL_ID")),
+			Provider:       defaultValue(os.Getenv("HARNESS_PROVIDER"), "ark"),
+			Model:          defaultValue(os.Getenv("HARNESS_MODEL"), os.Getenv("ARK_MODEL_ID")),
+			TimeoutSeconds: defaultInt(os.Getenv("HARNESS_MODEL_TIMEOUT_SECONDS"), 90),
 			Ark: ArkConfig{
 				APIKey:  os.Getenv("ARK_API_KEY"),
 				BaseURL: os.Getenv("ARK_BASE_URL"),
@@ -57,4 +60,15 @@ func defaultValue(value, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func defaultInt(value string, fallback int) int {
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }

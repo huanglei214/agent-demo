@@ -1,6 +1,8 @@
 package store
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 )
 
@@ -21,7 +23,19 @@ func (p Paths) RunsDir() string {
 }
 
 func (p Paths) RunDir(runID string) string {
-	return filepath.Join(p.RunsDir(), runID)
+	topLevel := filepath.Join(p.RunsDir(), runID)
+	if _, err := os.Stat(topLevel); err == nil {
+		return topLevel
+	}
+	data, err := os.ReadFile(p.ChildRunIndexPath(runID))
+	if err != nil {
+		return topLevel
+	}
+	var record childRunIndex
+	if err := json.Unmarshal(data, &record); err != nil || record.ParentRunID == "" {
+		return topLevel
+	}
+	return p.ChildRunDir(record.ParentRunID, runID)
 }
 
 func (p Paths) TasksDir() string {
@@ -92,6 +106,22 @@ func (p Paths) ChildrenDir(runID string) string {
 	return filepath.Join(p.RunDir(runID), "children")
 }
 
+func (p Paths) ChildRunDir(parentRunID, childRunID string) string {
+	return filepath.Join(p.ChildrenDir(parentRunID), childRunID)
+}
+
 func (p Paths) ChildPath(parentRunID, childRunID string) string {
 	return filepath.Join(p.ChildrenDir(parentRunID), childRunID+".json")
+}
+
+func (p Paths) ChildRunIndexDir() string {
+	return filepath.Join(p.RunsDir(), ".children")
+}
+
+func (p Paths) ChildRunIndexPath(childRunID string) string {
+	return filepath.Join(p.ChildRunIndexDir(), childRunID+".json")
+}
+
+type childRunIndex struct {
+	ParentRunID string `json:"parent_run_id"`
 }

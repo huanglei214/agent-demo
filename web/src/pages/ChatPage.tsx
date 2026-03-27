@@ -16,6 +16,7 @@ import {
   SuggestionChip,
 } from "../components/chat";
 import { JsonBlock } from "../components/JsonBlock";
+import { RunDebugDrawer } from "../components/debug/RunDebugDrawer";
 import { inspectSession, listSessions, streamAGUIChat } from "../lib/api";
 import { type Language, useI18n } from "../lib/i18n";
 import type {
@@ -32,9 +33,11 @@ type ChatPageProps = {
   healthState: string;
   language: Language;
   onLanguageChange: (language: Language) => void;
-  onOpenSession: (sessionId: string) => void;
-  onOpenRun: (runId: string) => void;
+  onOpenSession?: (id: string) => void;
+  onOpenRun?: (id: string) => void;
 };
+
+type ViewState = 'chat' | 'launchpad';
 
 type ChatFormState = {
   sessionId: string;
@@ -62,6 +65,7 @@ export function ChatPage({
   onOpenRun,
 }: ChatPageProps) {
   const { copy, formatMessageRole, formatRelativeTime } = useI18n();
+  const [view, setView] = useState<ViewState>('chat');
   const [form, setForm] = useState<ChatFormState>(initialForm);
   const [messages, setMessages] = useState<AGUIMessage[]>([]);
   const [activity, setActivity] = useState<AGUIEvent[]>([]);
@@ -75,8 +79,11 @@ export function ChatPage({
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingConversation, setLoadingConversation] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [debugRunId, setDebugRunId] = useState<string | null>(null);
   const [activeSession, setActiveSession] = useState<SessionInspectResponse | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const activeSessionId = form.sessionId.trim() || threadId;
   const activeSessionMessages = activeSession?.messages ?? [];
@@ -98,6 +105,13 @@ export function ChatPage({
   );
 
   useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+    }
+  }, [form.prompt]);
+
+  useEffect(() => {
     refreshSidebarSessions().catch(() => {
       setLoadingSessions(false);
     });
@@ -107,10 +121,26 @@ export function ChatPage({
     if (!messageEndRef.current) {
       return;
     }
-    messageEndRef.current.scrollIntoView({
-      behavior: sending || streamState === "live" ? "auto" : "smooth",
-      block: "end",
-    });
+    
+    const scrollToBottom = () => {
+      // Get the scrollable container (the parent section element)
+      const container = messageEndRef.current?.closest('.chat-conversation');
+      if (container) {
+        container.scrollTo({
+          top: container.scrollHeight,
+          behavior: sending || streamState === "live" ? "auto" : "smooth",
+        });
+      } else {
+        // Fallback
+        messageEndRef.current?.scrollIntoView({
+          behavior: sending || streamState === "live" ? "auto" : "smooth",
+          block: "end",
+        });
+      }
+    };
+    
+    // Use a small timeout to ensure DOM has updated
+    setTimeout(scrollToBottom, 50);
   }, [messages, sending, streamState]);
 
   useEffect(() => {
@@ -138,6 +168,7 @@ export function ChatPage({
               id: message.id,
               role: message.role,
               content: message.content,
+              runId: message.run_id,
             })),
           );
           setRunId(safeRuns[0]?.run_id ?? runId);
@@ -300,254 +331,220 @@ export function ChatPage({
 
   return (
     <div
-      className={`chat-shell bg-chat-bg text-chat-text selection:bg-white selection:text-black ${
+      className={`chat-shell bg-[#212121] text-chat-text selection:bg-white selection:text-black h-screen overflow-hidden ${
         activityOpen ? "chat-shell-drawer-open" : ""
-      }`}
+      } flex group/app`}
     >
-      <aside className="chat-sidebar bg-chat-panel">
-        <div className="chat-sidebar-brand">
-          <div className="chat-brand-badge">A</div>
-          <div>
-            <strong>{copy.chat.sidebarTitle}</strong>
-            <p>{copy.app.eyebrow}</p>
-          </div>
+      <aside className={`chat-sidebar bg-[#171717] border-r border-white/10 flex flex-col p-0 h-screen overflow-hidden transition-all duration-300 ${sidebarOpen ? 'w-[260px]' : 'w-[60px]'}`}>
+        <div className={`flex items-center p-3 flex-shrink-0 ${sidebarOpen ? 'justify-between' : 'justify-center relative group/sidebar-header'}`}>
+          {sidebarOpen ? (
+            <button
+              className="flex items-center gap-2 text-white/80 hover:bg-white/10 px-3 py-2 rounded-lg transition-colors flex-1 text-left"
+              type="button"
+              onClick={handleNewChat}
+            >
+              <div className="chat-brand-badge w-6 h-6 rounded-md text-xs flex items-center justify-center">A</div>
+              <span className="font-medium text-sm">新聊天</span>
+            </button>
+          ) : (
+            <>
+              <button
+                className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-lg transition-colors group-hover/sidebar-header:opacity-0"
+                type="button"
+                onClick={handleNewChat}
+              >
+                <div className="chat-brand-badge w-6 h-6 rounded-md text-xs flex items-center justify-center">A</div>
+              </button>
+              
+              <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover/sidebar-header:opacity-100 transition-opacity">
+                <div className="relative group/toggle">
+                  <button className="p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition-colors" onClick={() => setSidebarOpen(true)}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M19 3H5C3.89543 3 3 3.89543 3 5V19C3 20.1046 3.89543 21 5 21H19C20.1046 21 21 20.1046 21 19V5C21 3.89543 20.1046 3 19 3Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M9 3V21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </button>
+                  {/* Tooltip */}
+                  <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 bg-black text-white text-xs py-1.5 px-3 rounded-md whitespace-nowrap opacity-0 pointer-events-none group-hover/toggle:opacity-100 transition-opacity z-50">
+                    打开边栏
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+          {sidebarOpen && (
+            <div className="relative group/toggle-close">
+              <button className="p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition-colors" onClick={() => setSidebarOpen(false)}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M19 3H5C3.89543 3 3 3.89543 3 5V19C3 20.1046 3.89543 21 5 21H19C20.1046 21 21 20.1046 21 19V5C21 3.89543 20.1046 3 19 3Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M9 3V21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+              {/* Tooltip */}
+              <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 bg-black text-white text-xs py-1.5 px-3 rounded-md whitespace-nowrap opacity-0 pointer-events-none group-hover/toggle-close:opacity-100 transition-opacity z-50">
+                关闭边栏
+              </div>
+            </div>
+          )}
         </div>
 
-        <a className="chat-nav-link chat-nav-link-active" href="/">
-          {copy.app.navChat}
-        </a>
-        <a className="chat-nav-link" href="/launchpad">
-          {copy.app.navLaunchpad}
-        </a>
+        <div className={`px-3 pb-2 space-y-1 flex-shrink-0 ${sidebarOpen ? '' : 'flex flex-col items-center px-0'}`}>
+          {/* Removed Launchpad/App tab */}
+        </div>
 
-        <button
-          className="chat-new-button transition hover:bg-white hover:shadow-[0_12px_36px_rgba(0,0,0,0.24)]"
-          type="button"
-          onClick={handleNewChat}
-        >
-          {copy.chat.newChat}
-        </button>
-
-        <SidebarCard>
-          <span className="chat-sidebar-label">{copy.chat.currentSession}</span>
-          <p>{activeSessionId || copy.chat.sessionPlaceholder}</p>
-        </SidebarCard>
-
-        <SidebarCard>
-          <span className="chat-sidebar-label">{copy.chat.currentRun}</span>
-          <p>{runId || copy.common.notAvailable}</p>
-        </SidebarCard>
-
-        <div className="chat-sidebar-history">
-          <div className="chat-history-header">
-            <span className="chat-sidebar-label">{copy.chat.historyTitle}</span>
-            <button className="chat-history-refresh" type="button" onClick={() => void refreshSidebarSessions()}>
-              {copy.chat.refreshHistory}
-            </button>
-          </div>
-          <div className="chat-history-list">
+        {sidebarOpen ? (
+          <div className="chat-sidebar-history flex-1 overflow-y-auto px-3 py-2">
             {loadingSessions ? (
-              <span className="chat-activity-empty">{copy.common.loading}</span>
+              <div className="px-3 py-2 text-sm text-white/40">{copy.common.loading}</div>
             ) : recentSessions.length ? (
               groupedSessions.map((group) => (
                 group.sessions.length ? (
-                  <div key={group.label} className="space-y-2">
-                    <span className="chat-sidebar-label">{group.label}</span>
-                    {group.sessions.map((session) => (
-                      <HistorySessionButton
-                        key={session.id}
-                        active={session.id === activeSessionId}
-                        title={session.id}
-                        meta={formatRelativeTime(session.updated_at)}
-                        detail={`${session.run_count} runs`}
-                        onClick={() => handlePickSession(session.id)}
-                      />
-                    ))}
+                  <div key={group.label} className="mb-6">
+                    <div className="px-3 mb-2 text-xs font-medium text-white/40">{group.label}</div>
+                    <div className="space-y-0.5">
+                      {group.sessions.map((session) => (
+                        <button
+                          key={session.id}
+                          onClick={() => handlePickSession(session.id)}
+                          className={`w-full text-left px-3 py-2 rounded-lg text-sm truncate transition-colors ${
+                            session.id === activeSessionId
+                              ? 'bg-white/10 text-white'
+                              : 'text-white/70 hover:bg-white/5'
+                          }`}
+                        >
+                          {session.id}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 ) : null
               ))
             ) : (
-              <span className="chat-activity-empty">{copy.chat.noHistory}</span>
+              <div className="px-3 py-2 text-sm text-white/40">{copy.chat.noHistory}</div>
             )}
           </div>
-        </div>
+        ) : (
+          <div className="flex-1"></div>
+        )}
 
-        <div className="chat-sidebar-footer">
-          <div className="language-switch" aria-label={copy.app.language.label}>
-            <span className="language-label">{copy.app.language.label}</span>
-            <button
-              className={language === "en" ? "language-button active" : "language-button"}
-              type="button"
-              onClick={() => onLanguageChange("en")}
-            >
-              {copy.app.language.english}
-            </button>
-            <button
-              className={language === "zh" ? "language-button active" : "language-button"}
-              type="button"
-              onClick={() => onLanguageChange("zh")}
-            >
-              {copy.app.language.chinese}
-            </button>
-          </div>
-          <div className={`health health-${healthState.replace(/\s+/g, "-")}`}>
-            <span className="health-dot" />
-            <span>{healthLabel}</span>
+        <div className={`chat-sidebar-footer p-3 border-t border-white/10 flex-shrink-0 ${sidebarOpen ? '' : 'flex justify-center px-0'}`}>
+          <div className={`relative group/user-item flex items-center ${sidebarOpen ? 'gap-3 px-3 py-2 w-full' : 'justify-center p-2 w-10 h-10'} text-sm text-white/80 hover:bg-white/10 rounded-lg cursor-pointer transition-colors`}>
+            <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center text-xs flex-shrink-0">H</div>
+            {sidebarOpen && <span className="flex-1 truncate">huang lei</span>}
+            {!sidebarOpen && (
+              <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 bg-black text-white text-xs py-1.5 px-3 rounded-md whitespace-nowrap opacity-0 pointer-events-none group-hover/user-item:opacity-100 transition-opacity z-50">
+                huang lei
+              </div>
+            )}
           </div>
         </div>
       </aside>
 
-      <main className="chat-main">
-        <header className="chat-header">
-          <div>
-            <h1>{copy.chat.headerTitle}</h1>
-            <p>{copy.chat.body}</p>
-          </div>
-          <div className="chat-header-actions">
-            <div className="chat-header-meta">
-              <MetaPill>
-                {copy.chat.provider}: {form.provider}
-              </MetaPill>
-              <MetaPill>
-                {copy.chat.model}: {form.model}
-              </MetaPill>
-              <MetaPill>
-                {copy.chat.streamStatus}: {formatChatStreamState(copy, streamState)}
-              </MetaPill>
-            </div>
-            <button
-              className={
-                activityOpen
-                  ? "chat-drawer-toggle active transition hover:opacity-90"
-                  : "chat-drawer-toggle transition hover:bg-white/12"
-              }
-              type="button"
-              onClick={() => setActivityOpen((current) => !current)}
-            >
-              {copy.chat.activityDrawerToggle}
-            </button>
+      <main className="chat-main flex-1 flex flex-col relative h-screen overflow-hidden transition-all duration-300">
+        <header className="chat-header items-center px-4 py-3 sticky top-0 z-20 bg-[#212121]">
+          <div className="flex items-center gap-3">
+            <h1 className="text-xl font-medium m-0 text-white/90 cursor-pointer hover:bg-white/5 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-2">
+              {copy.chat.headerTitle}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="opacity-60">
+                <path d="M6 9L12 15L18 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </h1>
           </div>
         </header>
 
-        <section className="chat-conversation">
-          {!conversationStarted ? (
-            <div className="chat-empty-state">
-              <p className="chat-empty-kicker">{copy.chat.emptyKicker}</p>
-              <h2>{copy.chat.emptyTitle}</h2>
-              <p>{copy.chat.emptyBody}</p>
-              <div className="chat-empty-actions">
-                <SuggestionChip
-                  onClick={() =>
-                    setForm((current) => ({ ...current, prompt: copy.chat.quickPromptInspect }))
-                  }
-                >
-                  {copy.chat.quickPromptInspect}
-                </SuggestionChip>
-                <SuggestionChip
-                  onClick={() =>
-                    setForm((current) => ({ ...current, prompt: copy.chat.quickPromptDebug }))
-                  }
-                >
-                  {copy.chat.quickPromptDebug}
-                </SuggestionChip>
-                <SuggestionChip
-                  onClick={() =>
-                    setForm((current) => ({ ...current, prompt: copy.chat.quickPromptSummarize }))
-                  }
-                >
-                  {copy.chat.quickPromptSummarize}
-                </SuggestionChip>
+        <section className={`chat-conversation flex-1 overflow-y-auto ${!conversationStarted ? 'flex flex-col justify-center' : ''}`}>
+            {!conversationStarted ? (
+              <div className="w-full flex flex-col items-center justify-center p-8 max-w-3xl mx-auto mt-[-20vh]">
+                <h1 className="text-5xl font-bold text-white mb-12">准备好了，随时开始</h1>
+
+                <div className="flex flex-wrap justify-center gap-3 mt-8">
+                  <button
+                    type="button"
+                    className="px-4 py-2 rounded-full border border-white/10 bg-white/5 text-sm text-gray-300 hover:bg-white/10 transition-colors pointer-events-auto"
+                    onClick={() =>
+                      setForm((current) => ({ ...current, prompt: copy.chat.quickPromptInspect }))
+                    }
+                  >
+                    {copy.chat.quickPromptInspect}
+                  </button>
+                  <button
+                    type="button"
+                    className="px-4 py-2 rounded-full border border-white/10 bg-white/5 text-sm text-gray-300 hover:bg-white/10 transition-colors pointer-events-auto"
+                    onClick={() =>
+                      setForm((current) => ({ ...current, prompt: copy.chat.quickPromptDebug }))
+                    }
+                  >
+                    {copy.chat.quickPromptDebug}
+                  </button>
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className="chat-message-flow">
-              {messages.map((message) => (
-                <MessageBubble
-                  key={message.id}
-                  role={message.role}
-                  roleLabel={formatMessageRole(message.role)}
+            ) : (
+              <div className="chat-message-flow pb-[280px] max-w-3xl mx-auto w-full px-4 pt-4">
+                {messages.map((message) => (
+                  <MessageBubble
+                    key={message.id}
+                    role={message.role}
+                    roleLabel={formatMessageRole(message.role)}
                   avatarLabel={copy.messages.role.assistant.slice(0, 1)}
                   content={
                     message.content ||
                     (message.id === latestAssistant?.id && sending ? copy.common.loading : "")
                   }
+                    onDebug={message.runId ? () => setDebugRunId(message.runId!) : undefined}
+                  />
+                ))}
+                <div ref={messageEndRef} />
+              </div>
+            )}
+          </section>
+
+        {/* Common Composer for both empty state and conversation */}
+        <div className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-[#212121] via-[#212121] to-transparent pt-10 pb-6 px-4 z-10 pointer-events-none transition-all duration-300 ${!conversationStarted ? 'translate-y-[-20vh]' : ''}`}>
+          <form className="chat-composer-shell max-w-3xl mx-auto w-full relative pointer-events-auto" onSubmit={handleSubmit}>
+            <div className="chat-composer rounded-3xl bg-[#303030] shadow-lg flex items-end px-4 py-3 gap-3">
+              <button className="text-gray-400 hover:text-white transition-colors flex-shrink-0 h-[32px] w-[32px] flex items-center justify-center rounded-full hover:bg-white/10" type="button" aria-label={copy.chat.newChat} onClick={handleNewChat}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="block m-auto">
+                  <path d="M12 5V19M5 12H19" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+              <div className="flex-1 flex flex-col justify-end min-h-[32px]">
+                <textarea
+                  ref={textareaRef}
+                  className="w-full bg-transparent border-0 outline-none text-white max-h-[200px] py-[4px] placeholder-gray-400 overflow-y-auto leading-[24px]"
+                  style={{ resize: 'none' }}
+                  rows={1}
+                  aria-label={copy.chat.prompt}
+                  value={form.prompt}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, prompt: event.target.value }))
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      if (form.prompt.trim() && !sending) {
+                        const event = new Event('submit', { bubbles: true, cancelable: true });
+                        e.currentTarget.form?.dispatchEvent(event);
+                      }
+                    }
+                  }}
+                  placeholder="今天我能为你做什么呢？"
                 />
-              ))}
-              <div ref={messageEndRef} />
+              </div>
+              <button
+                className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-white transition hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                type="submit"
+                aria-label={copy.chat.send}
+                disabled={sending || !form.prompt.trim()}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12 19V5M12 5L5 12M12 5L19 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
             </div>
-          )}
-        </section>
 
-        <form className="chat-composer-shell" onSubmit={handleSubmit}>
-          <div className="chat-composer-meta">
-            <ComposerField label={copy.chat.sessionId}>
-              <input
-                value={form.sessionId}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, sessionId: event.target.value }))
-                }
-                placeholder={copy.chat.sessionPlaceholder}
-              />
-            </ComposerField>
-            <ComposerField label={copy.chat.provider} size="medium">
-              <input
-                value={form.provider}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, provider: event.target.value }))
-                }
-              />
-            </ComposerField>
-            <ComposerField label={copy.chat.model} size="medium">
-              <input
-                value={form.model}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, model: event.target.value }))
-                }
-              />
-            </ComposerField>
-            <ComposerField label={copy.chat.maxTurns} size="small">
-              <input
-                type="number"
-                min={1}
-                value={form.maxTurns}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    maxTurns: Number(event.target.value) || 1,
-                  }))
-                }
-              />
-            </ComposerField>
-          </div>
-
-          <div className="chat-composer">
-            <button className="chat-composer-plus" type="button" aria-label={copy.chat.newChat} onClick={handleNewChat}>
-              +
-            </button>
-            <textarea
-              rows={1}
-              value={form.prompt}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, prompt: event.target.value }))
-              }
-              placeholder={copy.chat.promptPlaceholder}
-            />
-            <button
-              className="chat-send-button transition hover:opacity-90 disabled:hover:opacity-68"
-              type="submit"
-              disabled={sending}
-            >
-              {sending ? copy.chat.sending : copy.chat.send}
-            </button>
-          </div>
-
-          {error ? <p className="error-text chat-error-inline">{error}</p> : null}
-          <div className="chat-footer-note">
-            <span>{copy.chat.threadLabel}: {activeSessionId || copy.common.notAvailable}</span>
-            <span>{copy.chat.runLabel}: {runId || copy.common.notAvailable}</span>
-            <span>{copy.chat.eventCount}: {activity.length}</span>
-          </div>
-        </form>
+            {error ? <p className="error-text chat-error-inline">{error}</p> : null}
+          </form>
+        </div>
       </main>
 
       <aside className={activityOpen ? "chat-drawer chat-drawer-open" : "chat-drawer"}>
@@ -556,7 +553,7 @@ export function ChatPage({
             <span className="chat-sidebar-label">{copy.chat.activityTitle}</span>
             <h2>{copy.chat.drawerTitle}</h2>
           </div>
-          <button className="chat-drawer-close" type="button" onClick={() => setActivityOpen(false)}>
+          <button className="chat-drawer-close" type="button" aria-label="Close" onClick={() => setActivityOpen(false)}>
             ×
           </button>
         </div>
@@ -576,14 +573,14 @@ export function ChatPage({
             <DrawerActionButton
               type="button"
               disabled={!activeSessionId}
-              onClick={() => activeSessionId && onOpenSession(activeSessionId)}
+              onClick={() => activeSessionId && onOpenSession?.(activeSessionId)}
             >
               {copy.common.openSession}
             </DrawerActionButton>
             <DrawerActionButton
               type="button"
               disabled={!runId}
-              onClick={() => runId && onOpenRun(runId)}
+              onClick={() => runId && onOpenRun?.(runId)}
             >
               {copy.common.openRun}
             </DrawerActionButton>
@@ -629,6 +626,12 @@ export function ChatPage({
           <JsonBlock value={snapshot ?? { hint: copy.chat.emptyActivity }} />
         </div>
       </aside>
+
+      <RunDebugDrawer
+        runId={debugRunId}
+        onClose={() => setDebugRunId(null)}
+        language={language}
+      />
     </div>
   );
 }

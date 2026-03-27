@@ -82,8 +82,40 @@ func TestStartRunCreatesCompletedArtifactsWithMockProvider(t *testing.T) {
 	if modelCalls[0].Request.Input == "" {
 		t.Fatalf("expected persisted model request input, got %#v", modelCalls[0])
 	}
+	if modelCalls[0].Request.Provider != "mock" || modelCalls[0].Request.Model != "mock-model" {
+		t.Fatalf("expected provider/model metadata on model call, got %#v", modelCalls[0].Request)
+	}
+	if len(modelCalls[0].Request.Messages) != 2 {
+		t.Fatalf("expected provider-view messages on model call, got %#v", modelCalls[0].Request.Messages)
+	}
 	if modelCalls[0].Response == nil || modelCalls[0].Response.Text == "" {
 		t.Fatalf("expected persisted model response, got %#v", modelCalls[0])
+	}
+}
+
+func TestGenerateWithModelTimeoutUsesConfiguredDeadline(t *testing.T) {
+	t.Parallel()
+
+	services := NewServices(config.Config{
+		Model: config.ModelConfig{
+			TimeoutSeconds: 135,
+		},
+	})
+	capturingModel := &deadlineCapturingModel{}
+
+	_, err := services.generateWithModelTimeout(context.Background(), capturingModel, model.Request{
+		SystemPrompt: "system",
+		Input:        "hello",
+	})
+	if err != nil {
+		t.Fatalf("generate with timeout: %v", err)
+	}
+	if capturingModel.deadline.IsZero() {
+		t.Fatal("expected model context to have deadline")
+	}
+	remaining := time.Until(capturingModel.deadline)
+	if remaining < 130*time.Second || remaining > 135*time.Second {
+		t.Fatalf("expected deadline around 135s, got remaining %s", remaining)
 	}
 }
 
@@ -194,12 +226,14 @@ func TestStartRunInterceptsMemoryLikeWriteFileToolInConversationMode(t *testing.
 		return staticActionModel{
 			response: model.Action{
 				Action: "tool",
-				Tool:   "fs.write_file",
-				Input: map[string]any{
-					"path":      "user_info.txt",
-					"content":   "我已记住你的名字：黄磊",
-					"overwrite": true,
-				},
+				Calls: []model.ToolCall{{
+					Tool: "fs.write_file",
+					Input: map[string]any{
+						"path":      "user_info.txt",
+						"content":   "我已记住你的名字：黄磊",
+						"overwrite": true,
+					},
+				}},
 			},
 		}, nil
 	}
@@ -434,12 +468,14 @@ func TestExecuteRunRecordsStructuredToolFailureDetails(t *testing.T) {
 		return staticActionModel{
 			response: model.Action{
 				Action: "tool",
-				Tool:   "bash.exec",
-				Input: map[string]any{
-					"command":         "sleep 2",
-					"workdir":         ".",
-					"timeout_seconds": 1,
-				},
+				Calls: []model.ToolCall{{
+					Tool: "bash.exec",
+					Input: map[string]any{
+						"command":         "sleep 2",
+						"workdir":         ".",
+						"timeout_seconds": 1,
+					},
+				}},
 			},
 		}, nil
 	}
@@ -535,17 +571,21 @@ func TestStartRunAllowsFollowUpToolCallBeforeFinalAnswer(t *testing.T) {
 			responses: []model.Action{
 				{
 					Action: "tool",
-					Tool:   "fs.search",
-					Input: map[string]any{
-						"query": "weather.txt",
-					},
+					Calls: []model.ToolCall{{
+						Tool: "fs.search",
+						Input: map[string]any{
+							"query": "weather.txt",
+						},
+					}},
 				},
 				{
 					Action: "tool",
-					Tool:   "fs.read_file",
-					Input: map[string]any{
-						"path": "weather.txt",
-					},
+					Calls: []model.ToolCall{{
+						Tool: "fs.read_file",
+						Input: map[string]any{
+							"path": "weather.txt",
+						},
+					}},
 				},
 				{
 					Action: "final",
@@ -676,10 +716,12 @@ func TestStartRunRejectsToolOutsideActiveSkillAllowlist(t *testing.T) {
 		return staticActionModel{
 			response: model.Action{
 				Action: "tool",
-				Tool:   "fs.read_file",
-				Input: map[string]any{
-					"path": "README.md",
-				},
+				Calls: []model.ToolCall{{
+					Tool: "fs.read_file",
+					Input: map[string]any{
+						"path": "README.md",
+					},
+				}},
 			},
 		}, nil
 	}
@@ -700,7 +742,7 @@ func TestStartRunRejectsToolOutsideActiveSkillAllowlist(t *testing.T) {
 	}
 }
 
-func TestStartRunRejectsRepeatedWebSearchLoop(t *testing.T) {
+func TestStartRunForcesFinalAfterRepeatedWebRetrieval(t *testing.T) {
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
 	seedWeatherSkill(t, workspace)
@@ -712,9 +754,9 @@ func TestStartRunRejectsRepeatedWebSearchLoop(t *testing.T) {
 		"results": []map[string]any{{"title": "Weather", "url": "https://example.com/weather"}},
 	}})
 	registry.Register(staticTool{name: "web.fetch", access: toolruntime.AccessReadOnly, content: map[string]any{
-		"title":     "Weather",
-		"content":   "Today is cloudy and 22C.",
-		"final_url": "https://example.com/weather",
+		"title":            "Weather",
+		"content":          "Today is cloudy and 22C.",
+		"__echo_input_url": true,
 	}})
 	deps.ToolRegistry = registry
 	deps.ToolExecutor = toolruntime.NewExecutor(registry)
@@ -723,11 +765,76 @@ func TestStartRunRejectsRepeatedWebSearchLoop(t *testing.T) {
 	services.ModelFactory = func() (model.Model, error) {
 		return &actionSequenceModel{
 			responses: []model.Action{
-				{Action: "tool", Tool: "web.search", Input: map[string]any{"query": "武汉天气"}},
-				{Action: "tool", Tool: "web.fetch", Input: map[string]any{"url": "https://example.com/weather"}},
-				{Action: "tool", Tool: "web.search", Input: map[string]any{"query": "武汉天气 详细"}},
-				{Action: "tool", Tool: "web.fetch", Input: map[string]any{"url": "https://example.com/weather"}},
-				{Action: "tool", Tool: "web.search", Input: map[string]any{"query": "武汉天气 最新"}},
+				{Action: "tool", Calls: []model.ToolCall{{Tool: "web.search", Input: map[string]any{"query": "武汉天气"}}}},
+				{Action: "tool", Calls: []model.ToolCall{{Tool: "web.fetch", Input: map[string]any{"url": "https://example.com/weather"}}}},
+				{Action: "tool", Calls: []model.ToolCall{{Tool: "web.search", Input: map[string]any{"query": "武汉天气 详细"}}}},
+				{Action: "tool", Calls: []model.ToolCall{{Tool: "web.fetch", Input: map[string]any{"url": "https://example.com/weather-detail"}}}},
+				{Action: "tool", Calls: []model.ToolCall{{Tool: "web.search", Input: map[string]any{"query": "武汉天气 最新"}}}},
+				{Action: "final", Answer: "武汉今天多云，22C。来源：https://example.com/weather"},
+			},
+		}, nil
+	}
+
+	response, err := services.StartRun(RunRequest{
+		Instruction: "武汉天气怎么样",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    6,
+		Skill:       "weather-lookup",
+	})
+	if err != nil {
+		t.Fatalf("expected forced final to complete run, got %v", err)
+	}
+	if response.Run.Status != harnessruntime.RunCompleted {
+		t.Fatalf("expected completed run, got %#v", response.Run)
+	}
+	modelCalls, err := services.StateStore.LoadModelCalls(response.Run.ID)
+	if err != nil {
+		t.Fatalf("load model calls: %v", err)
+	}
+	foundForcedFinal := false
+	for _, call := range modelCalls {
+		if call.Phase == "forced_final" {
+			foundForcedFinal = true
+			break
+		}
+	}
+	if !foundForcedFinal {
+		t.Fatalf("expected forced_final model call, got %#v", modelCalls)
+	}
+}
+
+func TestStartRunFailsWhenForcedFinalStillRequestsTools(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+	seedWeatherSkill(t, workspace)
+
+	cfg := config.Load(workspace)
+	deps := NewDependencies(cfg)
+	registry := toolruntime.NewRegistry()
+	registry.Register(staticTool{name: "web.search", access: toolruntime.AccessReadOnly, content: map[string]any{
+		"query":   "武汉天气",
+		"results": []map[string]any{{"title": "Weather", "url": "https://example.com/weather"}},
+	}})
+	registry.Register(staticTool{name: "web.fetch", access: toolruntime.AccessReadOnly, content: map[string]any{
+		"title":            "Weather",
+		"content":          "Today is cloudy and 22C.",
+		"__echo_input_url": true,
+	}})
+	deps.ToolRegistry = registry
+	deps.ToolExecutor = toolruntime.NewExecutor(registry)
+	deps.DelegationManager = NewDependencies(cfg).DelegationManager
+	services := NewServicesFromDependencies(deps)
+	services.ModelFactory = func() (model.Model, error) {
+		return &actionSequenceModel{
+			responses: []model.Action{
+				{Action: "tool", Calls: []model.ToolCall{{Tool: "web.search", Input: map[string]any{"query": "武汉天气"}}}},
+				{Action: "tool", Calls: []model.ToolCall{{Tool: "web.fetch", Input: map[string]any{"url": "https://example.com/weather"}}}},
+				{Action: "tool", Calls: []model.ToolCall{{Tool: "web.search", Input: map[string]any{"query": "武汉天气 详细"}}}},
+				{Action: "tool", Calls: []model.ToolCall{{Tool: "web.fetch", Input: map[string]any{"url": "https://example.com/weather-detail"}}}},
+				{Action: "tool", Calls: []model.ToolCall{{Tool: "web.search", Input: map[string]any{"query": "武汉天气 最新"}}}},
+				{Action: "tool", Calls: []model.ToolCall{{Tool: "web.fetch", Input: map[string]any{"url": "https://example.com/weather-third"}}}},
 			},
 		}, nil
 	}
@@ -741,9 +848,9 @@ func TestStartRunRejectsRepeatedWebSearchLoop(t *testing.T) {
 		Skill:       "weather-lookup",
 	})
 	if err == nil {
-		t.Fatal("expected repeated web.search loop to be rejected")
+		t.Fatal("expected run to fail when forced-final call still requests tools")
 	}
-	if !strings.Contains(err.Error(), "repeated web.search loop detected") {
+	if !strings.Contains(err.Error(), "forced-final model response did not produce a final answer") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -1187,6 +1294,10 @@ type actionSequenceModel struct {
 	index     int
 }
 
+type deadlineCapturingModel struct {
+	deadline time.Time
+}
+
 type staticTool struct {
 	name    string
 	access  toolruntime.AccessMode
@@ -1198,8 +1309,20 @@ func (t staticTool) Description() string                { return "static test to
 func (t staticTool) AccessMode() toolruntime.AccessMode { return t.access }
 func (t staticTool) Execute(ctx context.Context, input json.RawMessage) (toolruntime.Result, error) {
 	_ = ctx
-	_ = input
-	return toolruntime.Result{Content: t.content}, nil
+	content := map[string]any{}
+	for key, value := range t.content {
+		content[key] = value
+	}
+	if echoURL, ok := content["__echo_input_url"].(bool); ok && echoURL {
+		delete(content, "__echo_input_url")
+		var payload map[string]any
+		if err := json.Unmarshal(input, &payload); err == nil {
+			if url, ok := payload["url"].(string); ok && strings.TrimSpace(url) != "" {
+				content["final_url"] = url
+			}
+		}
+	}
+	return toolruntime.Result{Content: content}, nil
 }
 
 func (m *actionSequenceModel) Generate(ctx context.Context, req model.Request) (model.Response, error) {
@@ -1212,6 +1335,16 @@ func (m *actionSequenceModel) Generate(ctx context.Context, req model.Request) (
 	m.index++
 	return model.Response{
 		Text:         string(data),
+		FinishReason: "stop",
+	}, nil
+}
+
+func (m *deadlineCapturingModel) Generate(ctx context.Context, req model.Request) (model.Response, error) {
+	_ = req
+	deadline, _ := ctx.Deadline()
+	m.deadline = deadline
+	return model.Response{
+		Text:         `{"action":"final","answer":"ok"}`,
 		FinishReason: "stop",
 	}, nil
 }

@@ -116,6 +116,34 @@ export type CreateSessionResponse = {
   session: Session;
 };
 
+export type ModelMessage = {
+  role: string;
+  content: string;
+};
+
+export type ModelCall = {
+  id: string;
+  run_id: string;
+  sequence: number;
+  phase?: string;
+  tool?: string;
+  request: {
+    system_prompt: string;
+    input: string;
+    provider?: string;
+    model?: string;
+    messages?: ModelMessage[];
+    metadata?: Record<string, unknown>;
+  };
+  response?: {
+    text: string;
+    finish_reason: string;
+    metadata?: Record<string, unknown>;
+  };
+  error?: string;
+  timestamp: string;
+};
+
 export type InspectRunResponse = {
   run: Run;
   plan: Plan;
@@ -139,6 +167,9 @@ export type InspectRunResponse = {
     updated_at: string;
   }>;
   event_count: number;
+  model_call_count: number;
+  model_calls: ModelCall[];
+  events: ReplayEvent[];
 };
 
 export type ReplaySummaryEntry = {
@@ -221,6 +252,7 @@ export type AGUIMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  runId?: string;
 };
 
 export type AGUIEvent = {

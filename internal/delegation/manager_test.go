@@ -41,7 +41,7 @@ func TestCanDelegateAndSaveChild(t *testing.T) {
 		Result: harnessruntime.DelegationResult{
 			ChildRunID:      "run_child",
 			Summary:         "child summary",
-			Artifacts:       []string{},
+			Artifacts:       []harnessruntime.DelegationArtifact{},
 			Findings:        []string{},
 			Risks:           []string{},
 			Recommendations: []string{},
@@ -76,26 +76,18 @@ func TestValidateToolsRejectsWriteForChild(t *testing.T) {
 	}
 }
 
-func TestCanDelegateRejectsNestedChildRun(t *testing.T) {
+func TestCanDelegateRejectsSubagentRun(t *testing.T) {
 	t.Parallel()
 
 	paths := store.NewPaths(t.TempDir())
 	manager := NewManager(paths)
 	parentRun := harnessruntime.Run{ID: "run_parent"}
-	childRun := harnessruntime.Run{ID: "run_child", ParentRunID: "run_parent"}
+	childRun := harnessruntime.Run{ID: "run_child", ParentRunID: "run_parent", Role: harnessruntime.RunRoleSubagent}
 	mustWriteRun(t, paths.RunPath(parentRun.ID), parentRun)
 	step := harnessruntime.PlanStep{ID: "step_1", Delegatable: true}
 
 	ok, reason := manager.CanDelegate(context.Background(), childRun, step)
-	if !ok || reason != "" {
-		t.Fatalf("expected child run to still be allowed at depth 1, got %v %q", ok, reason)
-	}
-
-	grandChild := harnessruntime.Run{ID: "run_grandchild", ParentRunID: "run_child"}
-	mustWriteRun(t, paths.RunPath(childRun.ID), childRun)
-
-	ok, reason = manager.CanDelegate(context.Background(), grandChild, step)
-	if ok || reason != "max_depth_exceeded" {
+	if ok || reason != "subagent_cannot_delegate" {
 		t.Fatalf("expected grandchild run to be rejected, got %v %q", ok, reason)
 	}
 }
@@ -116,7 +108,7 @@ func TestCanDelegateRejectsWhenActiveChildrenReachLimit(t *testing.T) {
 				Status:    harnessruntime.RunRunning,
 				CreatedAt: time.Now(),
 			},
-			Result:    harnessruntime.DelegationResult{ChildRunID: "child", Summary: "", Artifacts: []string{}, Findings: []string{}, Risks: []string{}, Recommendations: []string{}},
+			Result:    harnessruntime.DelegationResult{ChildRunID: "child", Summary: "", Artifacts: []harnessruntime.DelegationArtifact{}, Findings: []string{}, Risks: []string{}, Recommendations: []string{}},
 			UpdatedAt: time.Now(),
 		}
 		if err := manager.SaveChild(parentRun.ID, record); err != nil {
@@ -127,6 +119,24 @@ func TestCanDelegateRejectsWhenActiveChildrenReachLimit(t *testing.T) {
 	ok, reason := manager.CanDelegate(context.Background(), parentRun, step)
 	if ok || reason != "max_children_exceeded" {
 		t.Fatalf("expected max children rejection, got %v %q", ok, reason)
+	}
+}
+
+func TestBuildTaskDoesNotForwardParentMemoriesOrSummariesByDefault(t *testing.T) {
+	t.Parallel()
+
+	manager := NewManager(store.NewPaths(t.TempDir()))
+	task := manager.BuildTask(
+		harnessruntime.Run{ID: "run_parent", SessionID: "session_1"},
+		harnessruntime.Plan{Goal: "analyze repo"},
+		harnessruntime.PlanStep{ID: "step_1", Title: "Analyze repo", Description: "Inspect key files"},
+		"分析仓库结构并返回结构化总结",
+		[]harnessruntime.MemoryEntry{{Content: "用户偏好输出中文"}},
+		[]harnessruntime.Summary{{Content: "父运行已经读取过 README"}},
+	)
+
+	if len(task.TaskLocalContext) != 0 {
+		t.Fatalf("expected no task-local context by default, got %#v", task.TaskLocalContext)
 	}
 }
 

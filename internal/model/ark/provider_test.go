@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/huanglei214/agent-demo/internal/config"
 	"github.com/huanglei214/agent-demo/internal/model"
@@ -170,6 +171,23 @@ func TestGenerateClassifiesTimeoutErrors(t *testing.T) {
 		if arkErr.Kind != ErrorKindTimeout || !arkErr.Retryable() {
 			t.Fatalf("unexpected ark error: %#v", arkErr)
 		}
+	}
+}
+
+func TestNewUsesConfiguredHTTPTimeout(t *testing.T) {
+	t.Parallel()
+
+	provider := New(config.ModelConfig{
+		TimeoutSeconds: 135,
+		Ark: config.ArkConfig{
+			APIKey:  "test-key",
+			BaseURL: "https://ark.example.com",
+			ModelID: "ark-test",
+		},
+	})
+
+	if provider.http.Timeout != 135*time.Second {
+		t.Fatalf("expected configured timeout 135s, got %s", provider.http.Timeout)
 	}
 }
 

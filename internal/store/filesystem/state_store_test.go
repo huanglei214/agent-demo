@@ -109,6 +109,12 @@ func TestStateStoreSaveAndLoadRunArtifacts(t *testing.T) {
 			Request: harnessruntime.ModelRequestSnapshot{
 				SystemPrompt: "system prompt",
 				Input:        "user input",
+				Provider:     "mock",
+				Model:        "mock-model",
+				Messages: []harnessruntime.ModelMessage{
+					{Role: "system", Content: "system prompt"},
+					{Role: "user", Content: "user input"},
+				},
 				Metadata:     map[string]any{"role": "default-agent"},
 			},
 			Response: &harnessruntime.ModelResponseSnapshot{
@@ -236,6 +242,12 @@ func TestStateStoreSaveAndLoadRunArtifacts(t *testing.T) {
 	}
 	if len(gotModelCalls) != 1 || gotModelCalls[0].Request.Input != "user input" {
 		t.Fatalf("unexpected model calls: %#v", gotModelCalls)
+	}
+	if gotModelCalls[0].Request.Provider != "mock" || gotModelCalls[0].Request.Model != "mock-model" {
+		t.Fatalf("unexpected model request identity: %#v", gotModelCalls[0].Request)
+	}
+	if len(gotModelCalls[0].Request.Messages) != 2 {
+		t.Fatalf("expected 2 provider-view messages, got %#v", gotModelCalls[0].Request.Messages)
 	}
 
 	gotMessages, err := stateStore.LoadSessionMessages(session.ID)

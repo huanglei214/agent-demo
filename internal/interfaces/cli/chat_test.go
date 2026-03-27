@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/huanglei214/agent-demo/internal/app"
 	"github.com/huanglei214/agent-demo/internal/config"
@@ -38,6 +39,31 @@ func TestChatCommandStartsSessionAndReplies(t *testing.T) {
 	output := out.String()
 	if !strings.Contains(output, "session_id:") || !strings.Contains(output, "assistant>") {
 		t.Fatalf("unexpected chat output:\n%s", output)
+	}
+}
+
+func TestChatCommandDebugPrintsRunID(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+
+	cmd, err := NewRootCommand()
+	if err != nil {
+		t.Fatalf("new root command: %v", err)
+	}
+
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetIn(strings.NewReader("你好\n/exit\n"))
+	cmd.SetArgs([]string{"--workspace", workspace, "--provider", "mock", "chat", "--debug"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute chat command: %v", err)
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "run_id: run_") {
+		t.Fatalf("expected debug run_id output, got:\n%s", output)
 	}
 }
 
@@ -174,6 +200,46 @@ func TestFormatChatFailureRendersRunFailure(t *testing.T) {
 	want := "run failed: ark timeout error: request timed out"
 	if got != want {
 		t.Fatalf("unexpected formatted run failure:\nwant: %s\ngot:  %s", want, got)
+	}
+}
+
+func TestLatestSessionRunIDReturnsMostRecentRun(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+	services := app.NewServices(config.Load(workspace))
+
+	session, err := services.CreateSession(workspace)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	firstRun := harnessruntime.Run{
+		ID:        "run_old",
+		SessionID: session.ID,
+		Status:    harnessruntime.RunFailed,
+		CreatedAt: time.Unix(10, 0),
+		UpdatedAt: time.Unix(10, 0),
+	}
+	secondRun := harnessruntime.Run{
+		ID:        "run_new",
+		SessionID: session.ID,
+		Status:    harnessruntime.RunFailed,
+		CreatedAt: time.Unix(20, 0),
+		UpdatedAt: time.Unix(20, 0),
+	}
+	if err := services.StateStore.SaveRun(firstRun); err != nil {
+		t.Fatalf("save first run: %v", err)
+	}
+	if err := services.StateStore.SaveRun(secondRun); err != nil {
+		t.Fatalf("save second run: %v", err)
+	}
+
+	runID, err := latestSessionRunID(services, session.ID)
+	if err != nil {
+		t.Fatalf("latestSessionRunID: %v", err)
+	}
+	if runID != secondRun.ID {
+		t.Fatalf("expected latest run id %q, got %q", secondRun.ID, runID)
 	}
 }
 

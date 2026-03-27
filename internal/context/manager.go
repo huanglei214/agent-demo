@@ -1,6 +1,7 @@
 package context
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -51,6 +52,14 @@ type CompactInput struct {
 
 type Manager struct{}
 
+const (
+	maxConversationMessages      = 6
+	maxUserMessageRunes          = 600
+	maxAssistantMessageRunes     = 900
+	maxConversationExcerptHead   = 500
+	maxConversationExcerptTail   = 220
+)
+
 func NewManager() Manager {
 	return Manager{}
 }
@@ -84,13 +93,10 @@ func (m Manager) Build(input BuildInput) ModelContext {
 		})
 	}
 
-	messageItems := make([]Item, 0, len(input.Messages))
-	for _, message := range input.Messages {
-		messageItems = append(messageItems, Item{
-			Kind:    "message",
-			Title:   strings.Title(string(message.Role)),
-			Content: message.Content,
-		})
+	messageItems := buildConversationItems(input.Messages)
+	messagesOmitted := len(input.Messages) - len(messageItems)
+	if messagesOmitted < 0 {
+		messagesOmitted = 0
 	}
 
 	memoryItems := make([]Item, 0, len(input.Memories))
@@ -132,14 +138,91 @@ func (m Manager) Build(input BuildInput) ModelContext {
 		Summaries: summaryItems,
 		Recent:    recentItems,
 		Metadata: map[string]any{
-			"pinned_count":  len(pinned),
-			"message_count": len(messageItems),
-			"plan_count":    len(planItems),
-			"memory_count":  len(memoryItems),
-			"summary_count": len(summaryItems),
-			"recent_count":  len(recentItems),
+			"pinned_count":            len(pinned),
+			"message_count":           len(messageItems),
+			"message_source_count":    len(input.Messages),
+			"conversation_omitted":    messagesOmitted,
+			"plan_count":              len(planItems),
+			"memory_count":            len(memoryItems),
+			"summary_count":           len(summaryItems),
+			"recent_count":            len(recentItems),
 		},
 	}
+}
+
+func buildConversationItems(messages []harnessruntime.SessionMessage) []Item {
+	start := 0
+	if len(messages) > maxConversationMessages {
+		start = len(messages) - maxConversationMessages
+	}
+
+	items := make([]Item, 0, len(messages)-start)
+	for _, message := range messages[start:] {
+		items = append(items, Item{
+			Kind:    "message",
+			Title:   strings.Title(string(message.Role)),
+			Content: summarizeSessionMessageContent(message),
+		})
+	}
+	return items
+}
+
+func summarizeSessionMessageContent(message harnessruntime.SessionMessage) string {
+	content := strings.TrimSpace(message.Content)
+	if nested := unwrapFinalAnswer(content); nested != "" {
+		content = nested
+	}
+
+	maxRunes := maxUserMessageRunes
+	if message.Role == harnessruntime.MessageRoleAssistant {
+		maxRunes = maxAssistantMessageRunes
+	}
+	return summarizeConversationText(content, maxRunes)
+}
+
+func unwrapFinalAnswer(content string) string {
+	var payload struct {
+		Action string `json:"action"`
+		Answer string `json:"answer"`
+	}
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return ""
+	}
+	if payload.Action != "final" {
+		return ""
+	}
+	return strings.TrimSpace(payload.Answer)
+}
+
+func summarizeConversationText(content string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return content
+	}
+	runes := []rune(content)
+	if len(runes) <= maxRunes {
+		return content
+	}
+
+	head := maxConversationExcerptHead
+	if head > len(runes) {
+		head = len(runes)
+	}
+	tail := maxConversationExcerptTail
+	if tail > len(runes)-head {
+		tail = len(runes) - head
+	}
+	if tail < 0 {
+		tail = 0
+	}
+
+	var builder strings.Builder
+	builder.WriteString(string(runes[:head]))
+	builder.WriteString("\n...\n")
+	if tail > 0 {
+		builder.WriteString(string(runes[len(runes)-tail:]))
+	}
+	builder.WriteString(fmt.Sprintf("\n[truncated %d chars]", len(runes)-head-tail))
+	return builder.String()
 }
 
 func (m ModelContext) Render() string {

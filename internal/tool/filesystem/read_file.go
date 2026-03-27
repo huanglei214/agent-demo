@@ -33,10 +33,14 @@ func (t ReadFileTool) Execute(ctx context.Context, input json.RawMessage) (tool.
 	_ = ctx
 
 	var req struct {
-		Path string `json:"path"`
+		Path     string `json:"path"`
+		FilePath string `json:"file_path"`
 	}
 	if err := json.Unmarshal(input, &req); err != nil {
 		return tool.Result{}, err
+	}
+	if req.Path == "" {
+		req.Path = req.FilePath
 	}
 
 	path, err := t.fs.resolve(req.Path)

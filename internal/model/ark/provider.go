@@ -82,10 +82,14 @@ func (e *Error) Retryable() bool {
 }
 
 func New(cfg config.ModelConfig) Provider {
+	timeout := cfg.TimeoutSeconds
+	if timeout <= 0 {
+		timeout = 90
+	}
 	return Provider{
 		config: cfg,
 		http: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: time.Duration(timeout) * time.Second,
 		},
 	}
 }

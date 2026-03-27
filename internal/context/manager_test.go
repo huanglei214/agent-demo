@@ -95,3 +95,73 @@ func TestShouldCompactAndCompact(t *testing.T) {
 		t.Fatalf("unexpected summary: %#v", summary)
 	}
 }
+
+func TestBuildCompactsConversationHistory(t *testing.T) {
+	t.Parallel()
+
+	manager := NewManager()
+	messages := make([]harnessruntime.SessionMessage, 0, maxConversationMessages+2)
+	for i := 0; i < maxConversationMessages+2; i++ {
+		messages = append(messages, harnessruntime.SessionMessage{
+			Role:    harnessruntime.MessageRoleUser,
+			Content: "message-" + string(rune('0'+i)),
+		})
+	}
+
+	modelContext := manager.Build(BuildInput{
+		Task: harnessruntime.Task{
+			ID:          "task_1",
+			Instruction: "summarize the repo",
+			Workspace:   "/workspace",
+		},
+		Plan: harnessruntime.Plan{
+			ID:      "plan_1",
+			Goal:    "summarize the repo",
+			Version: 1,
+		},
+		Messages: messages,
+	})
+
+	if got := len(modelContext.Messages); got != maxConversationMessages {
+		t.Fatalf("expected %d conversation messages, got %d", maxConversationMessages, got)
+	}
+	if omitted := modelContext.Metadata["conversation_omitted"]; omitted != 2 {
+		t.Fatalf("expected 2 omitted messages, got %#v", omitted)
+	}
+	if strings.Contains(modelContext.Render(), "message-0") || strings.Contains(modelContext.Render(), "message-1") {
+		t.Fatalf("expected oldest messages to be omitted, got:\n%s", modelContext.Render())
+	}
+}
+
+func TestBuildSummarizesLongAssistantMessages(t *testing.T) {
+	t.Parallel()
+
+	manager := NewManager()
+	longAnswer := strings.Repeat("仓库总结", 260)
+	modelContext := manager.Build(BuildInput{
+		Task: harnessruntime.Task{
+			ID:          "task_1",
+			Instruction: "summarize the repo",
+			Workspace:   "/workspace",
+		},
+		Plan: harnessruntime.Plan{
+			ID:      "plan_1",
+			Goal:    "summarize the repo",
+			Version: 1,
+		},
+		Messages: []harnessruntime.SessionMessage{
+			{
+				Role:    harnessruntime.MessageRoleAssistant,
+				Content: harnessruntime.MustJSON(map[string]any{"action": "final", "answer": longAnswer}),
+			},
+		},
+	})
+
+	rendered := modelContext.Render()
+	if strings.Contains(rendered, `"action":"final"`) {
+		t.Fatalf("expected assistant final wrapper to be removed, got:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "[truncated ") {
+		t.Fatalf("expected long assistant message to be summarized, got:\n%s", rendered)
+	}
+}

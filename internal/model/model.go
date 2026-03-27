@@ -20,10 +20,20 @@ type Model interface {
 
 type Factory func() (Model, error)
 
+type ToolCall struct {
+	Tool  string         `json:"tool"`
+	Input map[string]any `json:"input,omitempty"`
+}
+
 type Action struct {
 	Action         string         `json:"action"`
 	Answer         string         `json:"answer,omitempty"`
-	Tool           string         `json:"tool,omitempty"`
-	Input          map[string]any `json:"input,omitempty"`
+	Calls          []ToolCall     `json:"calls,omitempty"`
 	DelegationGoal string         `json:"delegation_goal,omitempty"`
+	Subtask        *SubtaskAction `json:"subtask,omitempty"`
+}
+
+type SubtaskAction struct {
+	Goal  string `json:"goal,omitempty"`
+	Skill string `json:"skill,omitempty"`
 }

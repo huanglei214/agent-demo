@@ -24,7 +24,7 @@ run:
 	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" --provider "$(PROVIDER)" $(if $(MODEL),--model "$(MODEL)",) run $(if $(SESSION),--session "$(SESSION)",) $(if $(SKILL),--skill "$(SKILL)",) "$(ARGS)"
 
 chat:
-	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" --provider "$(PROVIDER)" $(if $(MODEL),--model "$(MODEL)",) chat $(if $(SESSION),--session "$(SESSION)",) $(if $(SKILL),--skill "$(SKILL)",)
+	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" --provider "$(PROVIDER)" $(if $(MODEL),--model "$(MODEL)",) chat $(if $(SESSION),--session "$(SESSION)",) $(if $(SKILL),--skill "$(SKILL)",) $(if $(DEBUG),--debug,)
 
 serve:
 	@$(CACHE_ENV) $(GO) run $(WEB_APP) --workspace "$(WORKSPACE)" --provider "$(PROVIDER)" $(if $(MODEL),--model "$(MODEL)",) --host "$(HOST)" --port "$(PORT)"

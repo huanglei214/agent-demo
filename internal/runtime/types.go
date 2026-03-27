@@ -9,6 +9,8 @@ import (
 
 type RunStatus string
 
+type RunRole string
+
 const (
 	RunPending   RunStatus = "pending"
 	RunRunning   RunStatus = "running"
@@ -16,6 +18,11 @@ const (
 	RunCompleted RunStatus = "completed"
 	RunFailed    RunStatus = "failed"
 	RunCancelled RunStatus = "cancelled"
+)
+
+const (
+	RunRoleLead     RunRole = "lead-agent"
+	RunRoleSubagent RunRole = "subagent"
 )
 
 type StepStatus string
@@ -66,6 +73,7 @@ type Run struct {
 	TaskID        string    `json:"task_id"`
 	SessionID     string    `json:"session_id"`
 	ParentRunID   string    `json:"parent_run_id,omitempty"`
+	Role          RunRole   `json:"role,omitempty"`
 	Status        RunStatus `json:"status"`
 	CurrentStepID string    `json:"current_step_id,omitempty"`
 	Provider      string    `json:"provider"`
@@ -148,39 +156,49 @@ type RunMemories struct {
 }
 
 type DelegationTask struct {
-	ID            string    `json:"id"`
-	ParentRunID   string    `json:"parent_run_id"`
-	SessionID     string    `json:"session_id"`
-	PlanStepID    string    `json:"plan_step_id"`
-	Goal          string    `json:"goal"`
-	AllowedTools  []string  `json:"allowed_tools,omitempty"`
-	ParentGoal    string    `json:"parent_goal,omitempty"`
-	StepTitle     string    `json:"step_title,omitempty"`
-	StepDesc      string    `json:"step_description,omitempty"`
-	Constraints   []string  `json:"constraints,omitempty"`
-	ContextMemory []string  `json:"context_memory,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID                 string    `json:"id"`
+	ParentRunID        string    `json:"parent_run_id"`
+	SessionID          string    `json:"session_id"`
+	PlanStepID         string    `json:"plan_step_id"`
+	Role               RunRole   `json:"role,omitempty"`
+	Goal               string    `json:"goal"`
+	AllowedTools       []string  `json:"allowed_tools,omitempty"`
+	StepTitle          string    `json:"step_title,omitempty"`
+	StepDesc           string    `json:"step_description,omitempty"`
+	Constraints        []string  `json:"constraints,omitempty"`
+	CompletionCriteria []string  `json:"completion_criteria,omitempty"`
+	TaskLocalContext   []string  `json:"task_local_context,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type DelegationResult struct {
-	ChildRunID      string   `json:"child_run_id"`
-	Summary         string   `json:"summary"`
-	Artifacts       []string `json:"artifacts"`
-	Findings        []string `json:"findings"`
-	Risks           []string `json:"risks"`
-	Recommendations []string `json:"recommendations"`
-	NeedsReplan     bool     `json:"needs_replan"`
+	ChildRunID      string               `json:"child_run_id"`
+	Summary         string               `json:"summary"`
+	Artifacts       []DelegationArtifact `json:"artifacts"`
+	Findings        []string             `json:"findings"`
+	Risks           []string             `json:"risks"`
+	Recommendations []string             `json:"recommendations"`
+	NeedsReplan     bool                 `json:"needs_replan"`
+}
+
+type DelegationArtifact struct {
+	Value string         `json:"value,omitempty"`
+	Name  string         `json:"name,omitempty"`
+	Path  string         `json:"path,omitempty"`
+	URL   string         `json:"url,omitempty"`
+	Extra map[string]any `json:"extra,omitempty"`
 }
 
 type RunState struct {
-	RunID             string         `json:"run_id"`
-	CurrentStepID     string         `json:"current_step_id,omitempty"`
-	TurnCount         int            `json:"turn_count"`
-	LastEventID       string         `json:"last_event_id,omitempty"`
-	ResumePhase       string         `json:"resume_phase,omitempty"`
-	PendingToolName   string         `json:"pending_tool_name,omitempty"`
-	PendingToolResult map[string]any `json:"pending_tool_result,omitempty"`
-	UpdatedAt         time.Time      `json:"updated_at"`
+	RunID              string           `json:"run_id"`
+	CurrentStepID      string           `json:"current_step_id,omitempty"`
+	TurnCount          int              `json:"turn_count"`
+	LastEventID        string           `json:"last_event_id,omitempty"`
+	ResumePhase        string           `json:"resume_phase,omitempty"`
+	PendingToolName    string           `json:"pending_tool_name,omitempty"`
+	PendingToolResult  map[string]any   `json:"pending_tool_result,omitempty"`
+	PendingToolResults []ToolCallResult `json:"pending_tool_results,omitempty"`
+	UpdatedAt          time.Time        `json:"updated_at"`
 }
 
 type RunResult struct {
@@ -188,6 +206,13 @@ type RunResult struct {
 	Status      RunStatus `json:"status"`
 	Output      string    `json:"output"`
 	CompletedAt time.Time `json:"completed_at,omitempty"`
+}
+
+type ToolCallResult struct {
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+	Tool       string         `json:"tool"`
+	Input      map[string]any `json:"input,omitempty"`
+	Result     map[string]any `json:"result,omitempty"`
 }
 
 type ModelCall struct {
@@ -205,7 +230,15 @@ type ModelCall struct {
 type ModelRequestSnapshot struct {
 	SystemPrompt string         `json:"system_prompt"`
 	Input        string         `json:"input"`
+	Provider     string         `json:"provider,omitempty"`
+	Model        string         `json:"model,omitempty"`
+	Messages     []ModelMessage `json:"messages,omitempty"`
 	Metadata     map[string]any `json:"metadata,omitempty"`
+}
+
+type ModelMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 type ModelResponseSnapshot struct {

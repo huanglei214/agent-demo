@@ -1,7 +1,9 @@
 package prompt
 
 import (
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	harnesscontext "github.com/huanglei214/agent-demo/internal/context"
@@ -23,22 +25,18 @@ func NewBuilder() Builder {
 	return Builder{templates: defaultTemplates()}
 }
 
-func (b Builder) BuildRunPrompt(task harnessruntime.Task, plan harnessruntime.Plan, currentStep *harnessruntime.PlanStep, modelContext harnesscontext.ModelContext, tools []map[string]string, activeSkill *skill.Definition) Prompt {
+func (b Builder) BuildRunPrompt(role harnessruntime.RunRole, task harnessruntime.Task, plan harnessruntime.Plan, currentStep *harnessruntime.PlanStep, modelContext harnesscontext.ModelContext, tools []map[string]string, activeSkill *skill.Definition) Prompt {
 	sections := []string{
 		b.templates.base,
-		b.templates.defaultRole,
-		b.templates.taskGuidance,
+		b.roleLayer(role),
+		b.taskGuidance(role),
 	}
 	if skillLayer := renderSkillLayer(activeSkill); skillLayer != "" {
 		sections = append(sections, skillLayer)
 	}
 	sections = append(sections, renderToolingLayer(tools))
 
-	inputParts := []string{
-		fmt.Sprintf("User instruction:\n%s", task.Instruction),
-		fmt.Sprintf("Workspace:\n%s", task.Workspace),
-		modelContext.Render(),
-	}
+	inputParts := b.runInputParts(role, task, modelContext)
 	if currentStep != nil {
 		inputParts = append(inputParts, fmt.Sprintf("Current step:\n- id=%s\n- title=%s\n- status=%s", currentStep.ID, currentStep.Title, currentStep.Status))
 	}
@@ -50,7 +48,7 @@ func (b Builder) BuildRunPrompt(task harnessruntime.Task, plan harnessruntime.Pl
 			"task_id":      task.ID,
 			"plan_id":      plan.ID,
 			"plan_version": plan.Version,
-			"role":         "default-agent",
+			"role":         string(normalizeRole(role)),
 			"layers":       promptLayers(activeSkill != nil),
 			"tool_count":   len(tools),
 			"skill":        activeSkillName(activeSkill),
@@ -58,21 +56,11 @@ func (b Builder) BuildRunPrompt(task harnessruntime.Task, plan harnessruntime.Pl
 	}
 }
 
-func (b Builder) BuildFollowUpPrompt(task harnessruntime.Task, toolName string, toolResult map[string]any, summaries []harnessruntime.Summary, tools []map[string]string, activeSkill *skill.Definition) Prompt {
+func (b Builder) BuildFollowUpPrompt(role harnessruntime.RunRole, task harnessruntime.Task, toolResults []harnessruntime.ToolCallResult, workingEvidence map[string]any, tools []map[string]string, activeSkill *skill.Definition) Prompt {
 	sections := []string{
 		b.templates.base,
-		b.templates.defaultRole,
-		`Follow-up rule:
-You have already received a tool result.
-If the result is not yet sufficient, you may call another provided tool.
-If the user asked for a factual answer, do not stop at raw links or search results when a follow-up fetch can answer more directly.
-If you already have a credible fetched page with a readable title or content, prefer giving the best sourced answer you can instead of searching again.
-Do not repeat the same search/fetch loop on the same topic once you already have one or two usable fetched pages.
-If evidence is partial but enough for a cautious answer, respond with the best supported answer and note uncertainty rather than continuing to loop.
-You MUST return valid JSON only in one of these shapes:
-{"action":"tool","tool":"...","input":{...}}
-or
-{"action":"final","answer":"..."}`,
+		b.roleLayer(role),
+		b.followUpRule(role),
 	}
 	if skillLayer := renderSkillLayer(activeSkill); skillLayer != "" {
 		sections = append(sections, skillLayer)
@@ -80,17 +68,16 @@ or
 	sections = append(sections, renderToolingLayer(tools))
 	systemPrompt := strings.Join(sections, "\n\n")
 
-	inputParts := []string{
-		"Original instruction:\n" + task.Instruction,
-		"Tool used:\n" + toolName,
-		"Tool result:\n" + harnessruntime.MustJSON(toolResult),
+	inputParts := []string{}
+	switch normalizeRole(role) {
+	case harnessruntime.RunRoleSubagent:
+		inputParts = append(inputParts, renderDelegatedTaskInput(task))
+	default:
+		inputParts = append(inputParts, "Original instruction:\n"+task.Instruction)
 	}
-	if len(summaries) > 0 {
-		parts := make([]string, 0, len(summaries))
-		for _, summary := range summaries {
-			parts = append(parts, summary.Scope+": "+summary.Content)
-		}
-		inputParts = append(inputParts, "Available summaries:\n"+strings.Join(parts, "\n\n"))
+	inputParts = append(inputParts, "New tool results:\n"+harnessruntime.MustJSON(summarizeToolResultsForPrompt(toolResults)))
+	if len(workingEvidence) > 0 {
+		inputParts = append(inputParts, "Working evidence:\n"+harnessruntime.MustJSON(workingEvidence))
 	}
 
 	return Prompt{
@@ -98,13 +85,209 @@ or
 		Input:  strings.Join(inputParts, "\n\n"),
 		Metadata: map[string]any{
 			"task_id":       task.ID,
-			"tool":          toolName,
+			"role":          string(normalizeRole(role)),
 			"layers":        promptLayers(activeSkill != nil),
-			"summary_count": len(summaries),
 			"skill":         activeSkillName(activeSkill),
 			"tool_count":    len(tools),
+			"new_tool_count": len(toolResults),
 		},
 	}
+}
+
+func (b Builder) BuildForcedFinalPrompt(role harnessruntime.RunRole, task harnessruntime.Task, reason string, evidence map[string]any, tools []map[string]string, activeSkill *skill.Definition) Prompt {
+	sections := []string{
+		b.templates.base,
+		b.roleLayer(role),
+		b.forcedFinalRule(role),
+	}
+	if skillLayer := renderSkillLayer(activeSkill); skillLayer != "" {
+		sections = append(sections, skillLayer)
+	}
+	sections = append(sections, renderToolingLayer(tools))
+	systemPrompt := strings.Join(sections, "\n\n")
+
+	inputParts := []string{}
+	switch normalizeRole(role) {
+	case harnessruntime.RunRoleSubagent:
+		inputParts = append(inputParts, renderDelegatedTaskInput(task))
+	default:
+		inputParts = append(inputParts, "Original instruction:\n"+task.Instruction)
+	}
+	if strings.TrimSpace(reason) != "" {
+		inputParts = append(inputParts, "Why you must answer now:\n"+reason)
+	}
+	inputParts = append(inputParts, "Retrieved evidence:\n"+harnessruntime.MustJSON(evidence))
+
+	return Prompt{
+		System: systemPrompt,
+		Input:  strings.Join(inputParts, "\n\n"),
+		Metadata: map[string]any{
+			"task_id":       task.ID,
+			"role":          string(normalizeRole(role)),
+			"layers":        promptLayers(activeSkill != nil),
+			"skill":         activeSkillName(activeSkill),
+			"tool_count":    len(tools),
+			"forced_final":  true,
+		},
+	}
+}
+
+func summarizeToolResultsForPrompt(toolResults []harnessruntime.ToolCallResult) []map[string]any {
+	if len(toolResults) == 0 {
+		return nil
+	}
+	summaries := make([]map[string]any, 0, len(toolResults))
+	for _, toolResult := range toolResults {
+		summaries = append(summaries, map[string]any{
+			"tool_call_id": toolResult.ToolCallID,
+			"tool":         toolResult.Tool,
+			"input":        toolResult.Input,
+			"result":       summarizeToolResultForPrompt(toolResult.Tool, toolResult.Result),
+		})
+	}
+	return summaries
+}
+
+func BuildWorkingEvidenceForPrompt(toolResults []harnessruntime.ToolCallResult) map[string]any {
+	if len(toolResults) == 0 {
+		return nil
+	}
+	grouped := map[string][]map[string]any{}
+	for _, toolResult := range toolResults {
+		grouped[toolResult.Tool] = append(grouped[toolResult.Tool], map[string]any{
+			"tool_call_id": toolResult.ToolCallID,
+			"input":        toolResult.Input,
+			"result":       summarizeToolResultForPrompt(toolResult.Tool, toolResult.Result),
+		})
+	}
+	keys := make([]string, 0, len(grouped))
+	for key := range grouped {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	ordered := map[string]any{}
+	for _, key := range keys {
+		ordered[key] = grouped[key]
+	}
+	return ordered
+}
+
+func (b Builder) runInputParts(role harnessruntime.RunRole, task harnessruntime.Task, modelContext harnesscontext.ModelContext) []string {
+	switch normalizeRole(role) {
+	case harnessruntime.RunRoleSubagent:
+		return []string{
+			renderDelegatedTaskInput(task),
+			fmt.Sprintf("Workspace:\n%s", task.Workspace),
+		}
+	default:
+		return []string{
+			fmt.Sprintf("User instruction:\n%s", task.Instruction),
+			fmt.Sprintf("Workspace:\n%s", task.Workspace),
+			modelContext.Render(),
+		}
+	}
+}
+
+func renderDelegatedTaskInput(task harnessruntime.Task) string {
+	if task.Metadata == nil || task.Metadata["delegated"] != "true" {
+		return "Delegated task:\n- goal: " + task.Instruction
+	}
+
+	var builder strings.Builder
+	builder.WriteString("Delegated task:\n")
+	builder.WriteString("- goal: ")
+	builder.WriteString(task.Instruction)
+	builder.WriteString("\n")
+
+	if tools := decodeStringSliceMetadata(task.Metadata["delegated_allowed_tools"]); len(tools) > 0 {
+		builder.WriteString("- allowed_tools:\n")
+		for _, tool := range tools {
+			builder.WriteString("  - ")
+			builder.WriteString(tool)
+			builder.WriteString("\n")
+		}
+	}
+	if constraints := decodeStringSliceMetadata(task.Metadata["delegated_constraints"]); len(constraints) > 0 {
+		builder.WriteString("- constraints:\n")
+		for _, constraint := range constraints {
+			builder.WriteString("  - ")
+			builder.WriteString(constraint)
+			builder.WriteString("\n")
+		}
+	}
+	if criteria := decodeStringSliceMetadata(task.Metadata["delegated_completion_criteria"]); len(criteria) > 0 {
+		builder.WriteString("- completion_criteria:\n")
+		for _, criterion := range criteria {
+			builder.WriteString("  - ")
+			builder.WriteString(criterion)
+			builder.WriteString("\n")
+		}
+	}
+	if contextItems := decodeStringSliceMetadata(task.Metadata["delegated_task_local_context"]); len(contextItems) > 0 {
+		builder.WriteString("Relevant task context:\n")
+		for _, item := range contextItems {
+			builder.WriteString("- ")
+			builder.WriteString(item)
+			builder.WriteString("\n")
+		}
+	}
+
+	return strings.TrimSpace(builder.String())
+}
+
+func decodeStringSliceMetadata(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err == nil {
+		return values
+	}
+	return nil
+}
+
+func (b Builder) roleLayer(role harnessruntime.RunRole) string {
+	switch normalizeRole(role) {
+	case harnessruntime.RunRoleSubagent:
+		return b.templates.subagentRole
+	default:
+		return b.templates.leadRole
+	}
+}
+
+func (b Builder) followUpRule(role harnessruntime.RunRole) string {
+	switch normalizeRole(role) {
+	case harnessruntime.RunRoleSubagent:
+		return b.templates.subagentFollowUpRule
+	default:
+		return b.templates.leadFollowUpRule
+	}
+}
+
+func (b Builder) forcedFinalRule(role harnessruntime.RunRole) string {
+	switch normalizeRole(role) {
+	case harnessruntime.RunRoleSubagent:
+		return b.templates.subagentForcedFinalRule
+	default:
+		return b.templates.leadForcedFinalRule
+	}
+}
+
+func (b Builder) taskGuidance(role harnessruntime.RunRole) string {
+	switch normalizeRole(role) {
+	case harnessruntime.RunRoleSubagent:
+		return b.templates.subagentTaskGuidance
+	default:
+		return b.templates.leadTaskGuidance
+	}
+}
+
+func normalizeRole(role harnessruntime.RunRole) harnessruntime.RunRole {
+	if strings.TrimSpace(string(role)) == "" {
+		return harnessruntime.RunRoleLead
+	}
+	return role
 }
 
 func renderSkillLayer(activeSkill *skill.Definition) string {

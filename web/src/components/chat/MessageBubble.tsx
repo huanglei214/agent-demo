@@ -3,6 +3,7 @@ type MessageBubbleProps = {
   roleLabel: string;
   avatarLabel: string;
   content: string;
+  onDebug?: () => void;
 };
 
 export function MessageBubble({
@@ -10,6 +11,7 @@ export function MessageBubble({
   roleLabel,
   avatarLabel,
   content,
+  onDebug,
 }: MessageBubbleProps) {
   const paragraphs = splitIntoParagraphs(content);
 
@@ -18,8 +20,21 @@ export function MessageBubble({
       {role === "assistant" ? (
         <div className="chat-avatar border border-white/6 bg-zinc-800/90">{avatarLabel}</div>
       ) : null}
-      <div className="chat-bubble-wrap">
-        <span className="chat-bubble-role">{roleLabel}</span>
+      <div className="chat-bubble-wrap group/bubble">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="chat-bubble-role m-0">{roleLabel}</span>
+          {role === "assistant" && onDebug && (
+            <button 
+              onClick={onDebug}
+              className="opacity-0 group-hover/bubble:opacity-100 transition-opacity text-white/40 hover:text-white/80 p-1.5 rounded bg-white/5 hover:bg-white/10"
+              title="Debug Run"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M10 20H14M12 16V20M12 16C10.8954 16 10 15.1046 10 14V11M12 16C13.1046 16 14 15.1046 14 14V11M10 11V7C10 5.89543 10.8954 5 12 5C13.1046 5 14 5.89543 14 7V11M10 11H14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+          )}
+        </div>
         <div
           className={
             role === "user"

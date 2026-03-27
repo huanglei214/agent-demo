@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
 	"github.com/huanglei214/agent-demo/internal/store"
@@ -27,7 +28,19 @@ func (s StateStore) SaveSession(session harnessruntime.Session) error {
 }
 
 func (s StateStore) SaveRun(run harnessruntime.Run) error {
-	return writeJSON(s.paths.RunPath(run.ID), run)
+	path := s.paths.RunPath(run.ID)
+	if strings.TrimSpace(run.ParentRunID) != "" {
+		path = filepath.Join(s.paths.ChildRunDir(run.ParentRunID, run.ID), "run.json")
+	}
+	if err := writeJSON(path, run); err != nil {
+		return err
+	}
+	if strings.TrimSpace(run.ParentRunID) != "" {
+		return writeJSON(s.paths.ChildRunIndexPath(run.ID), map[string]string{
+			"parent_run_id": run.ParentRunID,
+		})
+	}
+	return nil
 }
 
 func (s StateStore) SaveState(state harnessruntime.RunState) error {

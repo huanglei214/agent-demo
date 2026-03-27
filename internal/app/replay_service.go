@@ -47,6 +47,8 @@ func summarizeReplayEvent(event harnessruntime.Event) string {
 		return fmt.Sprintf("session %v created", payload["session_id"])
 	case "run.created":
 		return fmt.Sprintf("run created with status %v", payload["status"])
+	case "run.role_assigned":
+		return fmt.Sprintf("run role assigned as %v", payload["role"])
 	case "run.status_changed":
 		return fmt.Sprintf("run status %v -> %v", payload["from"], payload["to"])
 	case "run.completed":
@@ -78,7 +80,13 @@ func summarizeReplayEvent(event harnessruntime.Event) string {
 		return fmt.Sprintf("committed %v memories", payload["count"])
 	case "model.called":
 		if phase := fmt.Sprint(payload["phase"]); phase != "<nil>" {
+			if role := fmt.Sprint(payload["role"]); role != "<nil>" && role != "" {
+				return fmt.Sprintf("model called (%s, %s)", phase, role)
+			}
 			return fmt.Sprintf("model called (%s)", phase)
+		}
+		if role := fmt.Sprint(payload["role"]); role != "<nil>" && role != "" {
+			return fmt.Sprintf("model called (%s)", role)
 		}
 		return "model called"
 	case "model.responded":

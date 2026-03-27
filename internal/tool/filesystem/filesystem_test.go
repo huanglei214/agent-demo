@@ -33,6 +33,27 @@ func TestReadFileToolSuccess(t *testing.T) {
 	}
 }
 
+func TestReadFileToolSupportsFilePathAlias(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	target := filepath.Join(workspace, "notes.txt")
+	if err := os.WriteFile(target, []byte("hello harness"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+
+	result, err := NewReadFileTool(workspace).Execute(context.Background(), mustJSON(t, map[string]any{
+		"file_path": "notes.txt",
+	}))
+	if err != nil {
+		t.Fatalf("read file with file_path: %v", err)
+	}
+
+	if result.Content["content"] != "hello harness" {
+		t.Fatalf("unexpected content: %#v", result.Content)
+	}
+}
+
 func TestListDirToolSuccess(t *testing.T) {
 	t.Parallel()
 
