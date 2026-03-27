@@ -72,6 +72,10 @@ func (p Paths) EventsPath(runID string) string {
 	return filepath.Join(p.RunDir(runID), "events.jsonl")
 }
 
+func (p Paths) ModelCallsPath(runID string) string {
+	return filepath.Join(p.RunDir(runID), "model_calls.jsonl")
+}
+
 func (p Paths) SummariesPath(runID string) string {
 	return filepath.Join(p.RunDir(runID), "summaries.json")
 }

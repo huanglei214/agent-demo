@@ -20,6 +20,7 @@ type startRunRequest struct {
 	Model       string `json:"model"`
 	MaxTurns    int    `json:"max_turns"`
 	SessionID   string `json:"session_id"`
+	Skill       string `json:"skill"`
 }
 
 func (s Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +79,7 @@ func (s Server) handleStartRun(w http.ResponseWriter, r *http.Request) {
 		Model:       model,
 		MaxTurns:    maxTurns,
 		SessionID:   strings.TrimSpace(req.SessionID),
+		Skill:       strings.TrimSpace(req.Skill),
 	})
 	if err != nil {
 		writeServiceError(w, err)

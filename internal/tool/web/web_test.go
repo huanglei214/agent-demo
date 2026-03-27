@@ -115,6 +115,79 @@ func TestFetchToolExtractsContent(t *testing.T) {
 	}
 }
 
+func TestFetchToolPrefersMainContentAndDropsNoise(t *testing.T) {
+	t.Parallel()
+
+	tool := NewFetchTool()
+	tool.client = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return stringResponse(http.StatusOK, `
+				<html>
+					<head>
+						<title>武汉天气</title>
+						<style>.banner { color: red; }</style>
+						<script>console.log("ignore me")</script>
+					</head>
+					<body>
+						<nav>首页 天气 视频 财经</nav>
+						<main>
+							<h1>武汉天气</h1>
+							<p>今天多云，22C，东北风 2 级。</p>
+						</main>
+						<footer>Copyright weather site</footer>
+					</body>
+				</html>
+			`)
+		}),
+	}
+
+	result, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"url": "https://example.com/weather",
+	}))
+	if err != nil {
+		t.Fatalf("fetch execute: %v", err)
+	}
+
+	content := result.Content["content"].(string)
+	if !strings.Contains(content, "今天多云，22C，东北风 2 级。") {
+		t.Fatalf("expected main content, got %#v", result.Content)
+	}
+	for _, unwanted := range []string{"banner", "console.log", "首页 天气 视频 财经", "Copyright weather site"} {
+		if strings.Contains(content, unwanted) {
+			t.Fatalf("unexpected noise %q in content: %#v", unwanted, result.Content)
+		}
+	}
+}
+
+func TestFetchToolFallsBackToBodyWhenNoMainOrArticleExists(t *testing.T) {
+	t.Parallel()
+
+	tool := NewFetchTool()
+	tool.client = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return stringResponse(http.StatusOK, `
+				<html>
+					<head><title>天气播报</title></head>
+					<body>
+						<section>实时天气：小雨，19C。</section>
+					</body>
+				</html>
+			`)
+		}),
+	}
+
+	result, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"url": "https://example.com/weather",
+	}))
+	if err != nil {
+		t.Fatalf("fetch execute: %v", err)
+	}
+
+	if !strings.Contains(result.Content["content"].(string), "实时天气：小雨，19C。") {
+		t.Fatalf("expected body fallback content, got %#v", result.Content)
+	}
+}
+
 func TestFetchToolRejectsRelativeURL(t *testing.T) {
 	t.Parallel()
 

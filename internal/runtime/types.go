@@ -190,6 +190,30 @@ type RunResult struct {
 	CompletedAt time.Time `json:"completed_at,omitempty"`
 }
 
+type ModelCall struct {
+	ID        string                 `json:"id"`
+	RunID     string                 `json:"run_id"`
+	Sequence  int64                  `json:"sequence"`
+	Phase     string                 `json:"phase,omitempty"`
+	Tool      string                 `json:"tool,omitempty"`
+	Request   ModelRequestSnapshot   `json:"request"`
+	Response  *ModelResponseSnapshot `json:"response,omitempty"`
+	Error     string                 `json:"error,omitempty"`
+	Timestamp time.Time              `json:"timestamp"`
+}
+
+type ModelRequestSnapshot struct {
+	SystemPrompt string         `json:"system_prompt"`
+	Input        string         `json:"input"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
+}
+
+type ModelResponseSnapshot struct {
+	Text         string         `json:"text"`
+	FinishReason string         `json:"finish_reason"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
+}
+
 func NewID(prefix string) string {
 	buf := make([]byte, 4)
 	if _, err := rand.Read(buf); err != nil {

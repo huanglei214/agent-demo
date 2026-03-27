@@ -12,7 +12,23 @@ const (
 	maxFetchedContentRunes = 4000
 )
 
-var tagPattern = regexp.MustCompile(`(?s)<[^>]+>`)
+var (
+	tagPattern           = regexp.MustCompile(`(?s)<[^>]+>`)
+	htmlCommentPattern   = regexp.MustCompile(`(?is)<!--.*?-->`)
+	scriptBlockPattern   = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
+	styleBlockPattern    = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
+	noscriptBlockPattern = regexp.MustCompile(`(?is)<noscript[^>]*>.*?</noscript>`)
+	templateBlockPattern = regexp.MustCompile(`(?is)<template[^>]*>.*?</template>`)
+	svgBlockPattern      = regexp.MustCompile(`(?is)<svg[^>]*>.*?</svg>`)
+	headerBlockPattern   = regexp.MustCompile(`(?is)<header[^>]*>.*?</header>`)
+	footerBlockPattern   = regexp.MustCompile(`(?is)<footer[^>]*>.*?</footer>`)
+	navBlockPattern      = regexp.MustCompile(`(?is)<nav[^>]*>.*?</nav>`)
+	asideBlockPattern    = regexp.MustCompile(`(?is)<aside[^>]*>.*?</aside>`)
+	formBlockPattern     = regexp.MustCompile(`(?is)<form[^>]*>.*?</form>`)
+	mainPattern          = regexp.MustCompile(`(?is)<main[^>]*>(.*?)</main>`)
+	articlePattern       = regexp.MustCompile(`(?is)<article[^>]*>(.*?)</article>`)
+	bodyPattern          = regexp.MustCompile(`(?is)<body[^>]*>(.*?)</body>`)
+)
 
 func normalizeLimit(limit int) int {
 	switch {
@@ -29,6 +45,38 @@ func stripTags(input string) string {
 	withoutTags := tagPattern.ReplaceAllString(input, " ")
 	unescaped := html.UnescapeString(withoutTags)
 	return strings.Join(strings.Fields(unescaped), " ")
+}
+
+func stripNoiseBlocks(input string) string {
+	cleaned := htmlCommentPattern.ReplaceAllString(input, " ")
+	for _, pattern := range []*regexp.Regexp{
+		scriptBlockPattern,
+		styleBlockPattern,
+		noscriptBlockPattern,
+		templateBlockPattern,
+		svgBlockPattern,
+		headerBlockPattern,
+		footerBlockPattern,
+		navBlockPattern,
+		asideBlockPattern,
+		formBlockPattern,
+	} {
+		cleaned = pattern.ReplaceAllString(cleaned, " ")
+	}
+	return cleaned
+}
+
+func extractMeaningfulContent(input string) string {
+	cleaned := stripNoiseBlocks(input)
+	for _, pattern := range []*regexp.Regexp{mainPattern, articlePattern, bodyPattern} {
+		if match := pattern.FindStringSubmatch(cleaned); len(match) >= 2 {
+			content := stripTags(match[1])
+			if content != "" {
+				return content
+			}
+		}
+	}
+	return stripTags(cleaned)
 }
 
 func truncateString(input string, maxRunes int) (string, bool) {

@@ -55,6 +55,10 @@ func (s StateStore) AppendSessionMessage(message harnessruntime.SessionMessage) 
 	return appendJSONL(path, message)
 }
 
+func (s StateStore) AppendModelCall(call harnessruntime.ModelCall) error {
+	return appendJSONL(s.paths.ModelCallsPath(call.RunID), call)
+}
+
 func (s StateStore) LoadRun(runID string) (harnessruntime.Run, error) {
 	var run harnessruntime.Run
 	err := readJSON(s.paths.RunPath(runID), &run)
@@ -133,6 +137,27 @@ func (s StateStore) LoadRunMemories(runID string) (harnessruntime.RunMemories, e
 	var memories harnessruntime.RunMemories
 	err := readJSON(s.paths.RunMemoriesPath(runID), &memories)
 	return memories, err
+}
+
+func (s StateStore) LoadModelCalls(runID string) ([]harnessruntime.ModelCall, error) {
+	path := s.paths.ModelCallsPath(runID)
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	calls := make([]harnessruntime.ModelCall, 0)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var call harnessruntime.ModelCall
+		if err := json.Unmarshal(scanner.Bytes(), &call); err != nil {
+			return nil, err
+		}
+		calls = append(calls, call)
+	}
+
+	return calls, scanner.Err()
 }
 
 func writeJSON(path string, value any) error {

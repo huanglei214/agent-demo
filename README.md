@@ -69,6 +69,36 @@ make tools
 - `write`：写入工具，例如 `fs.write_file`、`fs.str_replace`
 - `exec`：执行工具，例如 `bash.exec`
 
+## Skills
+
+当前项目开始支持文件系统原生的 skills。
+
+约定的 skill 目录优先级为：
+
+- 项目级：`.skills/`
+- 用户级：`~/.agent-demo/skills/`
+
+每个 skill 目录的入口文件是 `SKILL.md`，并可选携带：
+
+- `references/`
+- `scripts/`
+- `assets/`
+
+第一批只内置了一个示范 skill：
+
+- `weather-lookup`
+
+它会复用 `web.search` 和 `web.fetch`，要求搜索后至少读取一个页面，不允许只返回链接。
+
+显式指定 skill 的方式：
+
+```bash
+make run PROVIDER=mock SKILL=weather-lookup ARGS='武汉天气怎么样'
+make chat PROVIDER=mock SKILL=weather-lookup
+```
+
+如果用户问题明显是在查询实时天气，运行时也会尝试自动命中 `weather-lookup`。
+
 启动本地 HTTP API：
 
 ```bash
@@ -199,6 +229,12 @@ make chat PROVIDER=mock
 ```text
 you> 请帮我整理下面这段需求\
 ...> 并给出一个计划
+```
+
+如果要在整个 chat 会话里显式启用某个 skill：
+
+```bash
+make chat PROVIDER=mock SKILL=weather-lookup
 ```
 
 5. 如果要继续之前的会话：

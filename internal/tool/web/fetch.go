@@ -81,7 +81,7 @@ func (t FetchTool) Execute(ctx context.Context, input json.RawMessage) (tool.Res
 	if match := titlePattern.FindStringSubmatch(bodyText); len(match) >= 2 {
 		title = strings.TrimSpace(stripTags(match[1]))
 	}
-	content, truncated := truncateString(stripTags(bodyText), maxFetchedContentRunes)
+	content, truncated := truncateString(extractMeaningfulContent(bodyText), maxFetchedContentRunes)
 
 	finalURL := target
 	if resp.Request != nil && resp.Request.URL != nil {

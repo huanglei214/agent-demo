@@ -30,6 +30,11 @@
 - **THEN** 该核心工具面 MUST 包含本地工作区工具、外部检索工具和命令执行工具
 - **THEN** 系统 MUST 不要求低频辅助工具存在于默认核心集
 
+#### Scenario: 运行时按激活 skill 收窄工具面
+- **WHEN** 一次 `Run` 激活了某个 skill，且该 skill 声明了 `allowed-tools`
+- **THEN** 系统 MUST 在该次 `Run` 中根据 skill 约束收窄可用工具集
+- **THEN** 系统 MUST 不影响其它未激活该 skill 的运行
+
 ### Requirement: Run 生命周期状态管理
 系统 MUST 管理 `Run` 的生命周期状态，并在状态变化时写入结构化事件。
 
@@ -66,6 +71,11 @@
 - **THEN** 系统 MUST 保持原有事件持久化行为不变
 - **THEN** 系统 MUST 允许将同一事件广播给一个可选的实时观察者
 - **THEN** 实时观察者机制 MUST 不成为持久化事件写入成功的前置条件
+
+#### Scenario: 运行时记录 skill 激活
+- **WHEN** 某次 `Run` 激活了一个 skill
+- **THEN** 系统 MUST 记录该 skill 的名称或等效结构化标识
+- **THEN** 该记录 MUST 能在 inspect、replay 或调试路径中被查看
 
 ### Requirement: 标准运行时事件契约
 系统 MUST 为运行时关键阶段使用固定的标准事件名称，以保证 inspect、replay 和后续入口扩展的一致性。

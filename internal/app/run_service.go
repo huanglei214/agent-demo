@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	arkmodel "github.com/huanglei214/agent-demo/internal/model/ark"
 	"github.com/huanglei214/agent-demo/internal/planner"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
+	"github.com/huanglei214/agent-demo/internal/skill"
 	toolruntime "github.com/huanglei214/agent-demo/internal/tool"
 )
 
@@ -25,6 +27,7 @@ type RunRequest struct {
 	Model       string
 	MaxTurns    int
 	SessionID   string
+	Skill       string
 }
 
 type RunResponse struct {
@@ -33,12 +36,44 @@ type RunResponse struct {
 	Result *harnessruntime.RunResult `json:"result,omitempty"`
 }
 
+var repeatedToolCallLimits = map[string]int{
+	"web.search": 2,
+	"web.fetch":  2,
+}
+
 func (s Services) StartRun(req RunRequest) (RunResponse, error) {
 	return s.startRun(req, nil)
 }
 
 func (s Services) StartRunStream(req RunRequest, observer RunObserver) (RunResponse, error) {
 	return s.startRun(req, observer)
+}
+
+func (s Services) appendModelCall(run harnessruntime.Run, sequence int64, phase, toolName string, req model.Request, resp *model.Response, callErr error) error {
+	call := harnessruntime.ModelCall{
+		ID:       harnessruntime.NewID("modelcall"),
+		RunID:    run.ID,
+		Sequence: sequence,
+		Phase:    phase,
+		Tool:     toolName,
+		Request: harnessruntime.ModelRequestSnapshot{
+			SystemPrompt: req.SystemPrompt,
+			Input:        req.Input,
+			Metadata:     req.Metadata,
+		},
+		Timestamp: time.Now(),
+	}
+	if resp != nil {
+		call.Response = &harnessruntime.ModelResponseSnapshot{
+			Text:         resp.Text,
+			FinishReason: resp.FinishReason,
+			Metadata:     resp.Metadata,
+		}
+	}
+	if callErr != nil {
+		call.Error = callErr.Error()
+	}
+	return s.StateStore.AppendModelCall(call)
 }
 
 func (s Services) startRun(req RunRequest, observer RunObserver) (RunResponse, error) {
@@ -50,6 +85,17 @@ func (s Services) startRun(req RunRequest, observer RunObserver) (RunResponse, e
 		Instruction: req.Instruction,
 		Workspace:   req.Workspace,
 		CreatedAt:   now,
+	}
+
+	activeSkill, skillErr := s.resolveActiveSkill(req)
+	if skillErr != nil {
+		return RunResponse{}, skillErr
+	}
+	if activeSkill != nil {
+		task.Metadata = map[string]string{
+			"skill": activeSkill.Name,
+			"scope": string(activeSkill.Scope),
+		}
 	}
 
 	var (
@@ -162,12 +208,25 @@ func (s Services) startRun(req RunRequest, observer RunObserver) (RunResponse, e
 	}), observer); err != nil {
 		return RunResponse{}, err
 	}
+	if activeSkill != nil {
+		if err := s.appendEvent(s.newEvent(run, task.ID, session.ID, sequence+3, "skill.activated", "runtime", map[string]any{
+			"name":          activeSkill.Name,
+			"scope":         activeSkill.Scope,
+			"allowed_tools": activeSkill.AllowedTools,
+		}), observer); err != nil {
+			return RunResponse{}, err
+		}
+	}
 
 	return s.executeRun(task, session, run, plan, state, true, observer)
 }
 
 func (s Services) promptToolMetadata() []map[string]string {
-	descriptors := s.toolDescriptors()
+	return s.promptToolMetadataForSkill(nil)
+}
+
+func (s Services) promptToolMetadataForSkill(activeSkill *skill.Definition) []map[string]string {
+	descriptors := s.toolDescriptorsForNames(allowedToolSet(activeSkill))
 	result := make([]map[string]string, 0, len(descriptors))
 	for _, item := range descriptors {
 		result = append(result, map[string]string{
@@ -183,6 +242,10 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 	observer = ensureRunObserver(observer)
 	if len(plan.Steps) == 0 {
 		return RunResponse{}, errors.New("plan has no steps to execute")
+	}
+	activeSkill, err := s.activeSkillForTask(task)
+	if err != nil {
+		return RunResponse{}, err
 	}
 
 	currentStep := &plan.Steps[0]
@@ -273,7 +336,7 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 		Messages:     recentMessages,
 	})
 
-	runPrompt := s.PromptBuilder.BuildRunPrompt(task, plan, currentStep, modelContext, s.promptToolMetadata())
+	runPrompt := s.PromptBuilder.BuildRunPrompt(task, plan, currentStep, modelContext, s.promptToolMetadataForSkill(activeSkill), activeSkill)
 	explicitMemoryCandidates, explicitMemoryAnswer, routedToMemory := s.MemoryManager.DetectExplicitRemember(memory.ExplicitRememberInput{
 		SessionID:   session.ID,
 		RunID:       run.ID,
@@ -312,7 +375,7 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 	action := model.Action{Action: "final", Answer: explicitMemoryAnswer}
 
 	if !activate && state.ResumePhase == "post_tool" && state.PendingToolName != "" && len(state.PendingToolResult) > 0 {
-		followUpPrompt := s.PromptBuilder.BuildFollowUpPrompt(task, state.PendingToolName, state.PendingToolResult, summaries)
+		followUpPrompt := s.PromptBuilder.BuildFollowUpPrompt(task, state.PendingToolName, state.PendingToolResult, summaries, s.promptToolMetadataForSkill(activeSkill), activeSkill)
 		if err := s.appendEvent(s.newEvent(run, task.ID, session.ID, sequence+1, "model.called", "runtime", map[string]any{
 			"provider": run.Provider,
 			"model":    run.Model,
@@ -322,11 +385,15 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 			return RunResponse{}, err
 		}
 
-		followUpResponse, err := provider.Generate(ctx, model.Request{
+		followUpRequest := model.Request{
 			SystemPrompt: followUpPrompt.System,
 			Input:        followUpPrompt.Input,
 			Metadata:     followUpPrompt.Metadata,
-		})
+		}
+		followUpResponse, err := provider.Generate(ctx, followUpRequest)
+		if appendErr := s.appendModelCall(run, sequence+1, "post_tool_resume", state.PendingToolName, followUpRequest, responsePtr(followUpResponse, err), err); appendErr != nil {
+			return RunResponse{}, appendErr
+		}
 		if err != nil {
 			return s.failRun(run, plan, task.ID, session.ID, state, err, sequence+2, observer)
 		}
@@ -370,11 +437,15 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 			return RunResponse{}, err
 		}
 
-		modelResponse, err := provider.Generate(ctx, model.Request{
+		modelRequest := model.Request{
 			SystemPrompt: runPrompt.System,
 			Input:        runPrompt.Input,
 			Metadata:     runPrompt.Metadata,
-		})
+		}
+		modelResponse, err := provider.Generate(ctx, modelRequest)
+		if appendErr := s.appendModelCall(run, sequence+1, "", "", modelRequest, responsePtr(modelResponse, err), err); appendErr != nil {
+			return RunResponse{}, appendErr
+		}
 		if err != nil {
 			return s.failRun(run, plan, task.ID, session.ID, state, err, sequence+1, observer)
 		}
@@ -462,7 +533,7 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 			sequence++
 		}
 
-		followUpPrompt := s.PromptBuilder.BuildFollowUpPrompt(task, "subagent", delegationResultContent(childResult), summaries)
+		followUpPrompt := s.PromptBuilder.BuildFollowUpPrompt(task, "subagent", delegationResultContent(childResult), summaries, s.promptToolMetadataForSkill(activeSkill), activeSkill)
 		if err := s.appendEvent(s.newEvent(run, task.ID, session.ID, sequence+1, "model.called", "runtime", map[string]any{
 			"provider": run.Provider,
 			"model":    run.Model,
@@ -472,11 +543,15 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 			return RunResponse{}, err
 		}
 
-		followUpResponse, err := provider.Generate(ctx, model.Request{
+		followUpRequest := model.Request{
 			SystemPrompt: followUpPrompt.System,
 			Input:        followUpPrompt.Input,
 			Metadata:     followUpPrompt.Metadata,
-		})
+		}
+		followUpResponse, err := provider.Generate(ctx, followUpRequest)
+		if appendErr := s.appendModelCall(run, sequence+1, "post_delegation", "subagent", followUpRequest, responsePtr(followUpResponse, err), err); appendErr != nil {
+			return RunResponse{}, appendErr
+		}
 		if err != nil {
 			return s.failRun(run, plan, task.ID, session.ID, state, err, sequence+2, observer)
 		}
@@ -500,6 +575,12 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 	for action.Action == "tool" {
 		if action.Tool == "" {
 			return s.failRun(run, plan, task.ID, session.ID, state, errors.New("model requested tool execution without tool name"), sequence+1, observer)
+		}
+		if err := ensureSkillAllowsTool(activeSkill, action.Tool); err != nil {
+			return s.failRun(run, plan, task.ID, session.ID, state, err, sequence+1, observer)
+		}
+		if err := checkRepeatedToolLoop(recentEvents, action.Tool); err != nil {
+			return s.failRun(run, plan, task.ID, session.ID, state, err, sequence+1, observer)
 		}
 		if action.Tool == "fs.write_file" && len(explicitMemoryCandidates) > 0 {
 			if err := s.appendEvent(s.newEvent(run, task.ID, session.ID, sequence+1, "memory.routed", "memory", map[string]any{
@@ -617,7 +698,7 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 				return RunResponse{}, err
 			}
 
-			followUpPrompt := s.PromptBuilder.BuildFollowUpPrompt(task, action.Tool, toolResult.Content, summaries)
+			followUpPrompt := s.PromptBuilder.BuildFollowUpPrompt(task, action.Tool, toolResult.Content, summaries, s.promptToolMetadataForSkill(activeSkill), activeSkill)
 			if err := s.appendEvent(s.newEvent(run, task.ID, session.ID, sequence+1, "model.called", "runtime", map[string]any{
 				"provider": run.Provider,
 				"model":    run.Model,
@@ -627,11 +708,15 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 				return RunResponse{}, err
 			}
 
-			followUpResponse, err := provider.Generate(ctx, model.Request{
+			followUpRequest := model.Request{
 				SystemPrompt: followUpPrompt.System,
 				Input:        followUpPrompt.Input,
 				Metadata:     followUpPrompt.Metadata,
-			})
+			}
+			followUpResponse, err := provider.Generate(ctx, followUpRequest)
+			if appendErr := s.appendModelCall(run, sequence+1, "post_tool", action.Tool, followUpRequest, responsePtr(followUpResponse, err), err); appendErr != nil {
+				return RunResponse{}, appendErr
+			}
 			if err != nil {
 				return s.failRun(run, plan, task.ID, session.ID, state, err, sequence+2, observer)
 			}
@@ -775,6 +860,78 @@ func (s Services) executeRun(task harnessruntime.Task, session harnessruntime.Se
 		Run:    run,
 		Result: &result,
 	}, nil
+}
+
+func (s Services) resolveActiveSkill(req RunRequest) (*skill.Definition, error) {
+	if name := strings.TrimSpace(req.Skill); name != "" {
+		definition, ok, err := s.SkillRegistry.Resolve(name)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("skill not found: %s", name)
+		}
+		if err := definition.Metadata.ValidateAllowedTools(s.availableToolSet()); err != nil {
+			return nil, err
+		}
+		return &definition, nil
+	}
+
+	definition, ok, err := s.SkillRegistry.Match(req.Instruction)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	if err := definition.Metadata.ValidateAllowedTools(s.availableToolSet()); err != nil {
+		return nil, err
+	}
+	return &definition, nil
+}
+
+func (s Services) activeSkillForTask(task harnessruntime.Task) (*skill.Definition, error) {
+	if task.Metadata == nil {
+		return nil, nil
+	}
+	name := strings.TrimSpace(task.Metadata["skill"])
+	if name == "" {
+		return nil, nil
+	}
+	definition, ok, err := s.SkillRegistry.Resolve(name)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("skill referenced by task is missing: %s", name)
+	}
+	if err := definition.Metadata.ValidateAllowedTools(s.availableToolSet()); err != nil {
+		return nil, err
+	}
+	return &definition, nil
+}
+
+func allowedToolSet(activeSkill *skill.Definition) map[string]struct{} {
+	if activeSkill == nil || len(activeSkill.AllowedTools) == 0 {
+		return nil
+	}
+	result := make(map[string]struct{}, len(activeSkill.AllowedTools))
+	for _, name := range activeSkill.AllowedTools {
+		result[name] = struct{}{}
+	}
+	return result
+}
+
+func ensureSkillAllowsTool(activeSkill *skill.Definition, toolName string) error {
+	if activeSkill == nil || len(activeSkill.AllowedTools) == 0 {
+		return nil
+	}
+	for _, allowed := range activeSkill.AllowedTools {
+		if allowed == toolName {
+			return nil
+		}
+	}
+	return fmt.Errorf("tool %s is not allowed by active skill %s", toolName, activeSkill.Name)
 }
 
 func (s Services) appendEvent(event harnessruntime.Event, observer RunObserver) error {
@@ -1051,4 +1208,35 @@ func ensureStringSlice(value []string) []string {
 		return []string{}
 	}
 	return value
+}
+
+func responsePtr(resp model.Response, err error) *model.Response {
+	if err != nil {
+		return nil
+	}
+	return &resp
+}
+
+func checkRepeatedToolLoop(events []harnessruntime.Event, toolName string) error {
+	limit, ok := repeatedToolCallLimits[toolName]
+	if !ok {
+		return nil
+	}
+	if countToolCallsByName(events, toolName) >= limit {
+		return fmt.Errorf("repeated %s loop detected after %d calls; answer from fetched evidence instead of continuing", toolName, limit)
+	}
+	return nil
+}
+
+func countToolCallsByName(events []harnessruntime.Event, toolName string) int {
+	count := 0
+	for _, event := range events {
+		if event.Type != "tool.called" {
+			continue
+		}
+		if event.Payload["tool"] == toolName {
+			count++
+		}
+	}
+	return count
 }

@@ -11,6 +11,7 @@ import (
 func newRunCommand(ctx *commandContext) *cobra.Command {
 	var maxTurns int
 	var sessionID string
+	var skillName string
 
 	cmd := &cobra.Command{
 		Use:   "run <instruction>",
@@ -24,6 +25,7 @@ func newRunCommand(ctx *commandContext) *cobra.Command {
 				Model:       ctx.config.Model.Model,
 				MaxTurns:    maxTurns,
 				SessionID:   sessionID,
+				Skill:       skillName,
 			})
 			if err != nil {
 				return err
@@ -38,5 +40,6 @@ func newRunCommand(ctx *commandContext) *cobra.Command {
 
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 20, "Maximum model turns for the run")
 	cmd.Flags().StringVar(&sessionID, "session", "", "Append this instruction to an existing session")
+	cmd.Flags().StringVar(&skillName, "skill", "", "Activate a named skill for this run")
 	return cmd
 }

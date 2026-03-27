@@ -15,6 +15,7 @@ import (
 	"github.com/huanglei214/agent-demo/internal/model"
 	arkmodel "github.com/huanglei214/agent-demo/internal/model/ark"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
+	toolruntime "github.com/huanglei214/agent-demo/internal/tool"
 )
 
 func TestStartRunCreatesCompletedArtifactsWithMockProvider(t *testing.T) {
@@ -69,6 +70,20 @@ func TestStartRunCreatesCompletedArtifactsWithMockProvider(t *testing.T) {
 	}
 	if len(messages) != 2 {
 		t.Fatalf("expected two session messages, got %#v", messages)
+	}
+
+	modelCalls, err := services.StateStore.LoadModelCalls(response.Run.ID)
+	if err != nil {
+		t.Fatalf("load model calls: %v", err)
+	}
+	if len(modelCalls) == 0 {
+		t.Fatalf("expected persisted model calls, got %#v", modelCalls)
+	}
+	if modelCalls[0].Request.Input == "" {
+		t.Fatalf("expected persisted model request input, got %#v", modelCalls[0])
+	}
+	if modelCalls[0].Response == nil || modelCalls[0].Response.Text == "" {
+		t.Fatalf("expected persisted model response, got %#v", modelCalls[0])
 	}
 }
 
@@ -379,6 +394,12 @@ func TestExecuteRunMarksFailedRunAndPlanStepOnModelError(t *testing.T) {
 	if inspection.Plan.Steps[0].Status != harnessruntime.StepFailed {
 		t.Fatalf("expected failed step, got %#v", inspection.Plan.Steps[0])
 	}
+	if inspection.ModelCallCount == 0 {
+		t.Fatalf("expected inspect to include model call summaries, got %#v", inspection)
+	}
+	if len(inspection.ModelCalls) == 0 {
+		t.Fatalf("expected inspect to include model calls, got %#v", inspection)
+	}
 
 	events, err := services.ReplayRun(run.ID)
 	if err != nil {
@@ -555,6 +576,175 @@ func TestStartRunAllowsFollowUpToolCallBeforeFinalAnswer(t *testing.T) {
 	}
 	if got := countEventType(events, "tool.called"); got != 2 {
 		t.Fatalf("expected two tool calls, got %#v", events)
+	}
+}
+
+func TestStartRunActivatesExplicitSkillAndNarrowsPromptTools(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+	seedWeatherSkill(t, workspace)
+
+	cfg := config.Load(workspace)
+	services := NewServices(cfg)
+	seen := &capturedModelRequest{}
+	services.ModelFactory = func() (model.Model, error) {
+		return &inspectingModel{
+			captured: seen,
+			response: model.Action{
+				Action: "final",
+				Answer: "天气查询技能已激活。",
+			},
+		}, nil
+	}
+
+	response, err := services.StartRun(RunRequest{
+		Instruction: "请帮我查武汉天气",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    4,
+		Skill:       "weather-lookup",
+	})
+	if err != nil {
+		t.Fatalf("start run with explicit skill: %v", err)
+	}
+	if response.Result == nil || !strings.Contains(response.Result.Output, "技能已激活") {
+		t.Fatalf("unexpected result: %#v", response.Result)
+	}
+	if seen.SystemPrompt == "" {
+		t.Fatal("expected model request to be captured")
+	}
+	if !strings.Contains(seen.SystemPrompt, "Active skill: weather-lookup") {
+		t.Fatalf("expected skill layer in system prompt, got:\n%s", seen.SystemPrompt)
+	}
+	if strings.Contains(seen.SystemPrompt, "fs.read_file") {
+		t.Fatalf("expected prompt tool list to be narrowed by skill, got:\n%s", seen.SystemPrompt)
+	}
+
+	events, err := services.ReplayRun(response.Run.ID)
+	if err != nil {
+		t.Fatalf("replay run: %v", err)
+	}
+	assertEventPresent(t, events, "skill.activated")
+}
+
+func TestStartRunAutoMatchesWeatherSkill(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+	seedWeatherSkill(t, workspace)
+
+	cfg := config.Load(workspace)
+	services := NewServices(cfg)
+	services.ModelFactory = func() (model.Model, error) {
+		return &inspectingModel{
+			response: model.Action{
+				Action: "final",
+				Answer: "根据天气技能进行了查询准备。",
+			},
+		}, nil
+	}
+
+	response, err := services.StartRun(RunRequest{
+		Instruction: "武汉天气怎么样",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    4,
+	})
+	if err != nil {
+		t.Fatalf("start weather run: %v", err)
+	}
+	if response.Result == nil {
+		t.Fatalf("expected result, got %#v", response)
+	}
+
+	events, err := services.ReplayRun(response.Run.ID)
+	if err != nil {
+		t.Fatalf("replay run: %v", err)
+	}
+	assertEventPresent(t, events, "skill.activated")
+}
+
+func TestStartRunRejectsToolOutsideActiveSkillAllowlist(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+	seedWeatherSkill(t, workspace)
+
+	cfg := config.Load(workspace)
+	services := NewServices(cfg)
+	services.ModelFactory = func() (model.Model, error) {
+		return staticActionModel{
+			response: model.Action{
+				Action: "tool",
+				Tool:   "fs.read_file",
+				Input: map[string]any{
+					"path": "README.md",
+				},
+			},
+		}, nil
+	}
+
+	_, err := services.StartRun(RunRequest{
+		Instruction: "查一下武汉天气",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    4,
+		Skill:       "weather-lookup",
+	})
+	if err == nil {
+		t.Fatal("expected run to fail when model requests a disallowed tool")
+	}
+	if !strings.Contains(err.Error(), "not allowed by active skill") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestStartRunRejectsRepeatedWebSearchLoop(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+	seedWeatherSkill(t, workspace)
+
+	cfg := config.Load(workspace)
+	deps := NewDependencies(cfg)
+	registry := toolruntime.NewRegistry()
+	registry.Register(staticTool{name: "web.search", access: toolruntime.AccessReadOnly, content: map[string]any{
+		"results": []map[string]any{{"title": "Weather", "url": "https://example.com/weather"}},
+	}})
+	registry.Register(staticTool{name: "web.fetch", access: toolruntime.AccessReadOnly, content: map[string]any{
+		"title":     "Weather",
+		"content":   "Today is cloudy and 22C.",
+		"final_url": "https://example.com/weather",
+	}})
+	deps.ToolRegistry = registry
+	deps.ToolExecutor = toolruntime.NewExecutor(registry)
+	deps.DelegationManager = NewDependencies(cfg).DelegationManager
+	services := NewServicesFromDependencies(deps)
+	services.ModelFactory = func() (model.Model, error) {
+		return &actionSequenceModel{
+			responses: []model.Action{
+				{Action: "tool", Tool: "web.search", Input: map[string]any{"query": "武汉天气"}},
+				{Action: "tool", Tool: "web.fetch", Input: map[string]any{"url": "https://example.com/weather"}},
+				{Action: "tool", Tool: "web.search", Input: map[string]any{"query": "武汉天气 详细"}},
+				{Action: "tool", Tool: "web.fetch", Input: map[string]any{"url": "https://example.com/weather"}},
+				{Action: "tool", Tool: "web.search", Input: map[string]any{"query": "武汉天气 最新"}},
+			},
+		}, nil
+	}
+
+	_, err := services.StartRun(RunRequest{
+		Instruction: "武汉天气怎么样",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    6,
+		Skill:       "weather-lookup",
+	})
+	if err == nil {
+		t.Fatal("expected repeated web.search loop to be rejected")
+	}
+	if !strings.Contains(err.Error(), "repeated web.search loop detected") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -813,6 +1003,31 @@ func (m staticActionModel) Generate(ctx context.Context, req model.Request) (mod
 	}, nil
 }
 
+type capturedModelRequest struct {
+	SystemPrompt string
+	Input        string
+	Metadata     map[string]any
+}
+
+type inspectingModel struct {
+	captured *capturedModelRequest
+	response model.Action
+}
+
+func (m *inspectingModel) Generate(ctx context.Context, req model.Request) (model.Response, error) {
+	_ = ctx
+	if m.captured != nil {
+		m.captured.SystemPrompt = req.SystemPrompt
+		m.captured.Input = req.Input
+		m.captured.Metadata = req.Metadata
+	}
+	data, _ := json.Marshal(m.response)
+	return model.Response{
+		Text:         string(data),
+		FinishReason: "stop",
+	}, nil
+}
+
 type failingModel struct {
 	err error
 }
@@ -945,9 +1160,46 @@ func seedStoredRun(t *testing.T, services Services, workspace string, now time.T
 	return task, session, run, plan, state
 }
 
+func seedWeatherSkill(t *testing.T, workspace string) {
+	t.Helper()
+	path := filepath.Join(workspace, ".skills", "weather-lookup", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir weather skill: %v", err)
+	}
+	content := `---
+name: weather-lookup
+description: 查询城市实时天气并给出来源
+allowed-tools:
+  - web.search
+  - web.fetch
+tags:
+  - 天气
+  - 温度
+---
+先搜索再读取页面，不要只返回链接。`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write weather skill: %v", err)
+	}
+}
+
 type actionSequenceModel struct {
 	responses []model.Action
 	index     int
+}
+
+type staticTool struct {
+	name    string
+	access  toolruntime.AccessMode
+	content map[string]any
+}
+
+func (t staticTool) Name() string                       { return t.name }
+func (t staticTool) Description() string                { return "static test tool" }
+func (t staticTool) AccessMode() toolruntime.AccessMode { return t.access }
+func (t staticTool) Execute(ctx context.Context, input json.RawMessage) (toolruntime.Result, error) {
+	_ = ctx
+	_ = input
+	return toolruntime.Result{Content: t.content}, nil
 }
 
 func (m *actionSequenceModel) Generate(ctx context.Context, req model.Request) (model.Response, error) {

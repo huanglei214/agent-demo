@@ -21,6 +21,7 @@ func newChatCommand(ctx *commandContext) *cobra.Command {
 	var (
 		maxTurns  int
 		sessionID string
+		skillName string
 	)
 
 	cmd := &cobra.Command{
@@ -61,6 +62,7 @@ func newChatCommand(ctx *commandContext) *cobra.Command {
 						Model:       ctx.config.Model.Model,
 						MaxTurns:    maxTurns,
 						SessionID:   sessionID,
+						Skill:       skillName,
 					})
 					if err != nil {
 						if rendered, renderErr := renderLatestChatFailure(services, sessionID); renderErr == nil && rendered != "" {
@@ -81,6 +83,7 @@ func newChatCommand(ctx *commandContext) *cobra.Command {
 
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 20, "Maximum model turns for each chat round")
 	cmd.Flags().StringVar(&sessionID, "session", "", "Continue an existing session")
+	cmd.Flags().StringVar(&skillName, "skill", "", "Activate a named skill for each chat round")
 	return cmd
 }
 

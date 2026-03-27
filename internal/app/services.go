@@ -12,6 +12,7 @@ import (
 	"github.com/huanglei214/agent-demo/internal/model/mock"
 	"github.com/huanglei214/agent-demo/internal/planner"
 	"github.com/huanglei214/agent-demo/internal/prompt"
+	"github.com/huanglei214/agent-demo/internal/skill"
 	"github.com/huanglei214/agent-demo/internal/store"
 	"github.com/huanglei214/agent-demo/internal/store/filesystem"
 	toolruntime "github.com/huanglei214/agent-demo/internal/tool"
@@ -31,6 +32,7 @@ type Dependencies struct {
 	MemoryManager     memory.Manager
 	DelegationManager delegation.Manager
 	PromptBuilder     prompt.Builder
+	SkillRegistry     skill.Registry
 	ToolRegistry      *toolruntime.Registry
 	ToolExecutor      toolruntime.Executor
 }
@@ -46,6 +48,7 @@ type Services struct {
 	MemoryManager     memory.Manager
 	DelegationManager delegation.Manager
 	PromptBuilder     prompt.Builder
+	SkillRegistry     skill.Registry
 	ToolRegistry      *toolruntime.Registry
 	ToolExecutor      toolruntime.Executor
 }
@@ -69,6 +72,7 @@ func NewDependencies(cfg config.Config) Dependencies {
 		MemoryManager:     memory.NewManager(paths),
 		DelegationManager: delegation.NewManager(paths, delegation.WithAllowedTools(readOnlyToolNames(registry))),
 		PromptBuilder:     prompt.NewBuilder(),
+		SkillRegistry:     skill.NewRegistry(cfg.Workspace),
 		ToolRegistry:      registry,
 		ToolExecutor:      toolruntime.NewExecutor(registry),
 	}
@@ -86,6 +90,7 @@ func NewServicesFromDependencies(deps Dependencies) Services {
 		MemoryManager:     deps.MemoryManager,
 		DelegationManager: deps.DelegationManager,
 		PromptBuilder:     deps.PromptBuilder,
+		SkillRegistry:     deps.SkillRegistry,
 		ToolRegistry:      deps.ToolRegistry,
 		ToolExecutor:      deps.ToolExecutor,
 	}
@@ -144,6 +149,10 @@ func (e *unsupportedProviderError) Error() string {
 }
 
 func (s Services) toolDescriptors() []ToolDescriptor {
+	return s.toolDescriptorsForNames(nil)
+}
+
+func (s Services) toolDescriptorsForNames(allowed map[string]struct{}) []ToolDescriptor {
 	descriptors := s.ToolRegistry.Descriptors()
 	sort.Slice(descriptors, func(i, j int) bool {
 		return descriptors[i].Name < descriptors[j].Name
@@ -151,6 +160,11 @@ func (s Services) toolDescriptors() []ToolDescriptor {
 
 	result := make([]ToolDescriptor, 0, len(descriptors))
 	for _, item := range descriptors {
+		if len(allowed) > 0 {
+			if _, ok := allowed[item.Name]; !ok {
+				continue
+			}
+		}
 		result = append(result, ToolDescriptor{
 			Name:        item.Name,
 			Description: item.Description,
@@ -158,5 +172,14 @@ func (s Services) toolDescriptors() []ToolDescriptor {
 		})
 	}
 
+	return result
+}
+
+func (s Services) availableToolSet() map[string]struct{} {
+	descriptors := s.ToolRegistry.Descriptors()
+	result := make(map[string]struct{}, len(descriptors))
+	for _, item := range descriptors {
+		result[item.Name] = struct{}{}
+	}
 	return result
 }

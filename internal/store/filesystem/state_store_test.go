@@ -101,6 +101,23 @@ func TestStateStoreSaveAndLoadRunArtifacts(t *testing.T) {
 		},
 		UpdatedAt: now,
 	}
+	modelCalls := []harnessruntime.ModelCall{
+		{
+			ID:       "modelcall_1",
+			RunID:    run.ID,
+			Sequence: 10,
+			Request: harnessruntime.ModelRequestSnapshot{
+				SystemPrompt: "system prompt",
+				Input:        "user input",
+				Metadata:     map[string]any{"role": "default-agent"},
+			},
+			Response: &harnessruntime.ModelResponseSnapshot{
+				Text:         `{"action":"final","answer":"done"}`,
+				FinishReason: "stop",
+			},
+			Timestamp: now,
+		},
+	}
 	sessionMessages := []harnessruntime.SessionMessage{
 		{
 			ID:        "msg_1",
@@ -143,6 +160,11 @@ func TestStateStoreSaveAndLoadRunArtifacts(t *testing.T) {
 	}
 	if err := stateStore.SaveRunMemories(runMemories); err != nil {
 		t.Fatalf("save run memories: %v", err)
+	}
+	for _, call := range modelCalls {
+		if err := stateStore.AppendModelCall(call); err != nil {
+			t.Fatalf("append model call: %v", err)
+		}
 	}
 	for _, message := range sessionMessages {
 		if err := stateStore.AppendSessionMessage(message); err != nil {
@@ -206,6 +228,14 @@ func TestStateStoreSaveAndLoadRunArtifacts(t *testing.T) {
 	}
 	if len(gotRunMemories.Recalled) != 1 || len(gotRunMemories.Candidates) != 1 {
 		t.Fatalf("unexpected run memories: %#v", gotRunMemories)
+	}
+
+	gotModelCalls, err := stateStore.LoadModelCalls(run.ID)
+	if err != nil {
+		t.Fatalf("load model calls: %v", err)
+	}
+	if len(gotModelCalls) != 1 || gotModelCalls[0].Request.Input != "user input" {
+		t.Fatalf("unexpected model calls: %#v", gotModelCalls)
 	}
 
 	gotMessages, err := stateStore.LoadSessionMessages(session.ID)

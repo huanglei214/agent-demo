@@ -6,6 +6,7 @@ import (
 
 	harnesscontext "github.com/huanglei214/agent-demo/internal/context"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
+	"github.com/huanglei214/agent-demo/internal/skill"
 )
 
 type Prompt struct {
@@ -22,13 +23,16 @@ func NewBuilder() Builder {
 	return Builder{templates: defaultTemplates()}
 }
 
-func (b Builder) BuildRunPrompt(task harnessruntime.Task, plan harnessruntime.Plan, currentStep *harnessruntime.PlanStep, modelContext harnesscontext.ModelContext, tools []map[string]string) Prompt {
+func (b Builder) BuildRunPrompt(task harnessruntime.Task, plan harnessruntime.Plan, currentStep *harnessruntime.PlanStep, modelContext harnesscontext.ModelContext, tools []map[string]string, activeSkill *skill.Definition) Prompt {
 	sections := []string{
 		b.templates.base,
 		b.templates.defaultRole,
 		b.templates.taskGuidance,
-		renderToolingLayer(tools),
 	}
+	if skillLayer := renderSkillLayer(activeSkill); skillLayer != "" {
+		sections = append(sections, skillLayer)
+	}
+	sections = append(sections, renderToolingLayer(tools))
 
 	inputParts := []string{
 		fmt.Sprintf("User instruction:\n%s", task.Instruction),
@@ -47,25 +51,34 @@ func (b Builder) BuildRunPrompt(task harnessruntime.Task, plan harnessruntime.Pl
 			"plan_id":      plan.ID,
 			"plan_version": plan.Version,
 			"role":         "default-agent",
-			"layers":       []string{"base", "role", "task", "tooling"},
+			"layers":       promptLayers(activeSkill != nil),
 			"tool_count":   len(tools),
+			"skill":        activeSkillName(activeSkill),
 		},
 	}
 }
 
-func (b Builder) BuildFollowUpPrompt(task harnessruntime.Task, toolName string, toolResult map[string]any, summaries []harnessruntime.Summary) Prompt {
-	systemPrompt := strings.Join([]string{
+func (b Builder) BuildFollowUpPrompt(task harnessruntime.Task, toolName string, toolResult map[string]any, summaries []harnessruntime.Summary, tools []map[string]string, activeSkill *skill.Definition) Prompt {
+	sections := []string{
 		b.templates.base,
 		b.templates.defaultRole,
 		`Follow-up rule:
 You have already received a tool result.
 If the result is not yet sufficient, you may call another provided tool.
 If the user asked for a factual answer, do not stop at raw links or search results when a follow-up fetch can answer more directly.
+If you already have a credible fetched page with a readable title or content, prefer giving the best sourced answer you can instead of searching again.
+Do not repeat the same search/fetch loop on the same topic once you already have one or two usable fetched pages.
+If evidence is partial but enough for a cautious answer, respond with the best supported answer and note uncertainty rather than continuing to loop.
 You MUST return valid JSON only in one of these shapes:
 {"action":"tool","tool":"...","input":{...}}
 or
 {"action":"final","answer":"..."}`,
-	}, "\n\n")
+	}
+	if skillLayer := renderSkillLayer(activeSkill); skillLayer != "" {
+		sections = append(sections, skillLayer)
+	}
+	sections = append(sections, renderToolingLayer(tools))
+	systemPrompt := strings.Join(sections, "\n\n")
 
 	inputParts := []string{
 		"Original instruction:\n" + task.Instruction,
@@ -86,10 +99,42 @@ or
 		Metadata: map[string]any{
 			"task_id":       task.ID,
 			"tool":          toolName,
-			"layers":        []string{"base", "role", "task"},
+			"layers":        promptLayers(activeSkill != nil),
 			"summary_count": len(summaries),
+			"skill":         activeSkillName(activeSkill),
+			"tool_count":    len(tools),
 		},
 	}
+}
+
+func renderSkillLayer(activeSkill *skill.Definition) string {
+	if activeSkill == nil {
+		return ""
+	}
+	lines := []string{
+		fmt.Sprintf("Active skill: %s", activeSkill.Name),
+	}
+	if description := strings.TrimSpace(activeSkill.Description); description != "" {
+		lines = append(lines, "Skill description:", description)
+	}
+	if instructions := strings.TrimSpace(activeSkill.Instructions); instructions != "" {
+		lines = append(lines, "Skill instructions:", instructions)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func promptLayers(hasSkill bool) []string {
+	if hasSkill {
+		return []string{"base", "role", "task", "skill", "tooling"}
+	}
+	return []string{"base", "role", "task", "tooling"}
+}
+
+func activeSkillName(activeSkill *skill.Definition) string {
+	if activeSkill == nil {
+		return ""
+	}
+	return activeSkill.Name
 }
 
 func renderToolingLayer(tools []map[string]string) string {

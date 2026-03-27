@@ -21,10 +21,10 @@ tidy:
 
 run:
 	@if [ -z "$(ARGS)" ]; then echo "usage: make run ARGS='your instruction'"; exit 1; fi
-	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" --provider "$(PROVIDER)" $(if $(MODEL),--model "$(MODEL)",) run $(if $(SESSION),--session "$(SESSION)",) "$(ARGS)"
+	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" --provider "$(PROVIDER)" $(if $(MODEL),--model "$(MODEL)",) run $(if $(SESSION),--session "$(SESSION)",) $(if $(SKILL),--skill "$(SKILL)",) "$(ARGS)"
 
 chat:
-	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" --provider "$(PROVIDER)" $(if $(MODEL),--model "$(MODEL)",) chat $(if $(SESSION),--session "$(SESSION)",)
+	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" --provider "$(PROVIDER)" $(if $(MODEL),--model "$(MODEL)",) chat $(if $(SESSION),--session "$(SESSION)",) $(if $(SKILL),--skill "$(SKILL)",)
 
 serve:
 	@$(CACHE_ENV) $(GO) run $(WEB_APP) --workspace "$(WORKSPACE)" --provider "$(PROVIDER)" $(if $(MODEL),--model "$(MODEL)",) --host "$(HOST)" --port "$(PORT)"

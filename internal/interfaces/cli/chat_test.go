@@ -346,7 +346,7 @@ func TestInspectCommandIncludesCurrentStepAndChildRuns(t *testing.T) {
 	}
 
 	output := out.String()
-	if !strings.Contains(output, `"current_step"`) || !strings.Contains(output, `"child_runs"`) {
+	if !strings.Contains(output, `"current_step"`) || !strings.Contains(output, `"child_runs"`) || !strings.Contains(output, `"model_calls"`) {
 		t.Fatalf("expected inspect output to include current_step and child_runs, got:\n%s", output)
 	}
 }
