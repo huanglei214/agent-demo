@@ -49,8 +49,8 @@ type ChatFormState = {
 
 const initialForm: ChatFormState = {
   sessionId: "",
-  provider: "mock",
-  model: "mock-model",
+  provider: "",
+  model: "",
   maxTurns: 8,
   prompt: "",
 };

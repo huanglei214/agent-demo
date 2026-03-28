@@ -20,6 +20,18 @@ const (
 	maxCommandOutputRunes = 4000
 )
 
+var dangerousExecutables = map[string]struct{}{
+	"dd":        {},
+	"halt":      {},
+	"mkfs":      {},
+	"mkfs.ext4": {},
+	"mkfs.xfs":  {},
+	"poweroff":  {},
+	"reboot":    {},
+	"rm":        {},
+	"shutdown":  {},
+}
+
 type ExecTool struct {
 	workspace string
 }
@@ -28,6 +40,25 @@ type TimeoutError struct {
 	Command        string
 	Workdir        string
 	TimeoutSeconds int
+}
+
+type DangerousCommandError struct {
+	Command    string
+	Executable string
+	Segment    string
+}
+
+func (e DangerousCommandError) Error() string {
+	return "dangerous command is blocked"
+}
+
+func (e DangerousCommandError) Details() map[string]any {
+	return map[string]any{
+		"command":    e.Command,
+		"executable": e.Executable,
+		"segment":    e.Segment,
+		"blocked":    true,
+	}
 }
 
 func (e TimeoutError) Error() string {
@@ -73,6 +104,9 @@ func (t ExecTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 	command := strings.TrimSpace(req.Command)
 	if command == "" {
 		return tool.Result{}, errors.New("command is required")
+	}
+	if err := rejectDangerousCommand(command); err != nil {
+		return tool.Result{}, err
 	}
 	workdir, err := resolveInsideWorkspace(t.workspace, req.Workdir)
 	if err != nil {
@@ -154,4 +188,96 @@ func truncateRunes(input string, maxRunes int) (string, bool) {
 		return input, false
 	}
 	return string(runes[:maxRunes]), true
+}
+
+func rejectDangerousCommand(command string) error {
+	for _, segment := range splitCommandSegments(command) {
+		executable := firstExecutable(segment)
+		if executable == "" {
+			continue
+		}
+		if _, blocked := dangerousExecutables[executable]; blocked {
+			return DangerousCommandError{
+				Command:    command,
+				Executable: executable,
+				Segment:    strings.TrimSpace(segment),
+			}
+		}
+	}
+	return nil
+}
+
+func splitCommandSegments(command string) []string {
+	segments := make([]string, 0, 4)
+	start := 0
+	inSingleQuote := false
+	inDoubleQuote := false
+	inBacktick := false
+	escaped := false
+
+	for idx := 0; idx < len(command); idx++ {
+		ch := command[idx]
+		if escaped {
+			escaped = false
+			continue
+		}
+
+		switch ch {
+		case '\\':
+			if !inSingleQuote {
+				escaped = true
+			}
+		case '\'':
+			if !inDoubleQuote && !inBacktick {
+				inSingleQuote = !inSingleQuote
+			}
+		case '"':
+			if !inSingleQuote && !inBacktick {
+				inDoubleQuote = !inDoubleQuote
+			}
+		case '`':
+			if !inSingleQuote && !inDoubleQuote {
+				inBacktick = !inBacktick
+			}
+		case '&':
+			if !inSingleQuote && !inDoubleQuote && !inBacktick && idx+1 < len(command) && command[idx+1] == '&' {
+				segments = append(segments, command[start:idx])
+				idx++
+				start = idx + 1
+			}
+		case '|':
+			if !inSingleQuote && !inDoubleQuote && !inBacktick {
+				segments = append(segments, command[start:idx])
+				if idx+1 < len(command) && command[idx+1] == '|' {
+					idx++
+				}
+				start = idx + 1
+			}
+		case ';', '\n':
+			if !inSingleQuote && !inDoubleQuote && !inBacktick {
+				segments = append(segments, command[start:idx])
+				start = idx + 1
+			}
+		}
+	}
+
+	return append(segments, command[start:])
+}
+
+func firstExecutable(segment string) string {
+	fields := strings.Fields(strings.TrimSpace(segment))
+	for _, field := range fields {
+		if strings.Contains(field, "=") && !strings.HasPrefix(field, "/") && !strings.HasPrefix(field, ".") {
+			parts := strings.SplitN(field, "=", 2)
+			if len(parts) == 2 && parts[0] != "" {
+				continue
+			}
+		}
+		switch field {
+		case "sudo", "env", "command":
+			continue
+		}
+		return filepath.Base(field)
+	}
+	return ""
 }
