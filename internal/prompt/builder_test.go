@@ -3,6 +3,7 @@ package prompt
 import (
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	harnesscontext "github.com/huanglei214/agent-demo/internal/context"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
@@ -49,6 +50,41 @@ func TestBuildRunPromptIncludesFourLayers(t *testing.T) {
 
 	if prompt.Metadata["role"] != string(harnessruntime.RunRoleLead) {
 		t.Fatalf("unexpected metadata: %#v", prompt.Metadata)
+	}
+}
+
+func TestLoadTemplatesReadsEmbeddedFiles(t *testing.T) {
+	t.Parallel()
+
+	loaded, err := loadTemplates(fstest.MapFS{
+		"templates/base.txt":                       {Data: []byte("base")},
+		"templates/lead_role.txt":                  {Data: []byte("lead")},
+		"templates/subagent_role.txt":              {Data: []byte("sub")},
+		"templates/lead_task_guidance.txt":         {Data: []byte("lead task")},
+		"templates/subagent_task_guidance.txt":     {Data: []byte("sub task")},
+		"templates/lead_follow_up_rule.txt":        {Data: []byte("lead follow")},
+		"templates/subagent_follow_up_rule.txt":    {Data: []byte("sub follow")},
+		"templates/lead_forced_final_rule.txt":     {Data: []byte("lead force")},
+		"templates/subagent_forced_final_rule.txt": {Data: []byte("sub force")},
+	})
+	if err != nil {
+		t.Fatalf("loadTemplates returned error: %v", err)
+	}
+
+	if loaded.base != "base" || loaded.leadRole != "lead" || loaded.subagentForcedFinalRule != "sub force" {
+		t.Fatalf("unexpected loaded templates: %#v", loaded)
+	}
+}
+
+func TestNewBuilderLoadsExternalizedTemplates(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder()
+	if !strings.Contains(builder.templates.base, "local Go-based agent harness") {
+		t.Fatalf("expected embedded base template to be loaded, got %#v", builder.templates)
+	}
+	if !strings.Contains(builder.templates.leadRole, "Role: lead-agent.") {
+		t.Fatalf("expected embedded lead role template to be loaded, got %#v", builder.templates)
 	}
 }
 

@@ -1,0 +1,11 @@
+Follow-up rule:
+You have already received a tool result.
+If the result is not yet sufficient, you may call another provided tool.
+If the user asked for a factual answer, do not stop at raw links or search results when a follow-up fetch can answer more directly.
+If you already have a credible fetched page with a readable title or content, prefer giving the best sourced answer you can instead of searching again.
+Do not repeat the same search/fetch loop on the same topic once you already have one or two usable fetched pages.
+If evidence is partial but enough for a cautious answer, respond with the best supported answer and note uncertainty rather than continuing to loop.
+You MUST return valid JSON only in one of these shapes:
+{"action":"tool","calls":[{"tool":"...","input":{...}}]}
+or
+{"action":"final","answer":"..."}

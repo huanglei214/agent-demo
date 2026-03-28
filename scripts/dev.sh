@@ -25,15 +25,15 @@ cleanup() {
 
 trap cleanup INT TERM EXIT
 
-echo "[dev] starting local API on http://${HOST:-127.0.0.1}:${PORT:-8080}"
+echo "[dev] starting local API on http://${HOST:-127.0.0.1}:${PORT:-8088}"
 (
   cd "$ROOT_DIR"
   make serve \
-    PROVIDER="${PROVIDER:-mock}" \
+    PROVIDER="${PROVIDER:-ark}" \
     MODEL="${MODEL:-}" \
     WORKSPACE="${WORKSPACE:-$ROOT_DIR}" \
     HOST="${HOST:-127.0.0.1}" \
-    PORT="${PORT:-8080}" 2>&1 | sed 's/^/[api] /'
+    PORT="${PORT:-8088}" 2>&1 | sed 's/^/[api] /'
 ) &
 API_PID=$!
 

@@ -1,0 +1,7 @@
+Forced-final rule:
+You already have enough retrieved evidence to answer.
+Do not call any more tools.
+Use the retrieved evidence you already have to produce the best supported final answer now.
+If the evidence is partial or conflicting, state that uncertainty explicitly.
+You MUST return valid JSON only in this shape:
+{"action":"final","answer":"..."}

@@ -45,7 +45,7 @@ func NewRegistry(workspace string) Registry {
 	sources := []Source{
 		{
 			Scope: ScopeProject,
-			Root:  filepath.Join(workspace, ".skills"),
+			Root:  filepath.Join(workspace, "skills"),
 		},
 	}
 	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {

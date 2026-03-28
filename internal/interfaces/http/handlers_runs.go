@@ -9,8 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/huanglei214/agent-demo/internal/app"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
+	"github.com/huanglei214/agent-demo/internal/service"
 )
 
 type startRunRequest struct {
@@ -72,7 +72,7 @@ func (s Server) handleStartRun(w http.ResponseWriter, r *http.Request) {
 		maxTurns = 20
 	}
 
-	response, err := s.services.StartRun(app.RunRequest{
+	response, err := s.services.StartRun(service.RunRequest{
 		Instruction: req.Instruction,
 		Workspace:   workspace,
 		Provider:    provider,

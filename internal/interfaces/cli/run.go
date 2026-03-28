@@ -5,24 +5,29 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/huanglei214/agent-demo/internal/app"
+	"github.com/huanglei214/agent-demo/internal/service"
 )
 
 func newRunCommand(ctx *commandContext) *cobra.Command {
+	return buildRunCommand(ctx, "run <instruction>", "Create a local harness run")
+}
+
+func buildRunCommand(ctx *commandContext, use, short string) *cobra.Command {
 	var maxTurns int
 	var sessionID string
 	var skillName string
 
 	cmd := &cobra.Command{
-		Use:   "run <instruction>",
-		Short: "Create a local harness run",
+		Use:   use,
+		Short: short,
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			response, err := ctx.services().StartRun(app.RunRequest{
+			services := ctx.servicesFor(cmd)
+			response, err := services.StartRun(service.RunRequest{
 				Instruction: strings.Join(args, " "),
-				Workspace:   ctx.config.Workspace,
-				Provider:    ctx.config.Model.Provider,
-				Model:       ctx.config.Model.Model,
+				Workspace:   services.Config.Workspace,
+				Provider:    services.Config.Model.Provider,
+				Model:       services.Config.Model.Model,
 				MaxTurns:    maxTurns,
 				SessionID:   sessionID,
 				Skill:       skillName,

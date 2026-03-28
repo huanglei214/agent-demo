@@ -8,12 +8,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/huanglei214/agent-demo/internal/app"
 	"github.com/huanglei214/agent-demo/internal/config"
+	"github.com/huanglei214/agent-demo/internal/service"
 )
 
 type commandContext struct {
-	config config.Config
+	workspace string
+	provider  string
+	model     string
 }
 
 func NewRootCommand() (*cobra.Command, error) {
@@ -24,30 +26,75 @@ func NewRootCommand() (*cobra.Command, error) {
 
 	cfg := config.Load(workspace)
 	ctx := commandContext{
-		config: cfg,
+		workspace: cfg.Workspace,
+		provider:  cfg.Model.Provider,
+		model:     cfg.Model.Model,
 	}
 
 	rootCmd := &cobra.Command{
 		Use:   "harness",
-		Short: "Local agent harness CLI",
+		Short: "Local agent harness CLI with chat-first primary workflow",
 	}
 
-	rootCmd.PersistentFlags().StringVar(&ctx.config.Workspace, "workspace", cfg.Workspace, "Workspace root for the run")
-	rootCmd.PersistentFlags().StringVar(&ctx.config.Model.Provider, "provider", cfg.Model.Provider, "Model provider name")
-	rootCmd.PersistentFlags().StringVar(&ctx.config.Model.Model, "model", cfg.Model.Model, "Model identifier")
+	rootCmd.PersistentFlags().StringVar(&ctx.workspace, "workspace", cfg.Workspace, "Workspace root for the run")
+	rootCmd.PersistentFlags().StringVar(&ctx.provider, "provider", cfg.Model.Provider, "Model provider name")
+	rootCmd.PersistentFlags().StringVar(&ctx.model, "model", cfg.Model.Model, "Model identifier")
 
 	rootCmd.AddCommand(
-		newRunCommand(&ctx),
 		newChatCommand(&ctx),
-		newInspectCommand(&ctx),
-		newReplayCommand(&ctx),
-		newSessionCommand(&ctx),
-		newResumeCommand(&ctx),
-		newToolsCommand(&ctx),
 		newDebugCommand(&ctx),
 	)
 
+	rootCmd.AddCommand(newLegacyRunCommand(&ctx))
+	rootCmd.AddCommand(newLegacyInspectCommand(&ctx))
+	rootCmd.AddCommand(newLegacyReplayCommand(&ctx))
+	rootCmd.AddCommand(newLegacyResumeCommand(&ctx))
+	rootCmd.AddCommand(newLegacySessionCommand(&ctx))
+	rootCmd.AddCommand(newLegacyToolsCommand(&ctx))
+
 	return rootCmd, nil
+}
+
+func newLegacyRunCommand(ctx *commandContext) *cobra.Command {
+	cmd := newRunCommand(ctx)
+	cmd.Hidden = true
+	return cmd
+}
+
+func newLegacyInspectCommand(ctx *commandContext) *cobra.Command {
+	cmd := newInspectCommand(ctx)
+	cmd.Hidden = true
+	return cmd
+}
+
+func newLegacyReplayCommand(ctx *commandContext) *cobra.Command {
+	cmd := newReplayCommand(ctx)
+	cmd.Hidden = true
+	return cmd
+}
+
+func newLegacyResumeCommand(ctx *commandContext) *cobra.Command {
+	cmd := newResumeCommand(ctx)
+	cmd.Hidden = true
+	return cmd
+}
+
+func newLegacySessionCommand(ctx *commandContext) *cobra.Command {
+	cmd := newSessionCommand(ctx)
+	cmd.Hidden = true
+	for _, child := range cmd.Commands() {
+		child.Hidden = true
+	}
+	return cmd
+}
+
+func newLegacyToolsCommand(ctx *commandContext) *cobra.Command {
+	cmd := newToolsCommand(ctx)
+	cmd.Hidden = true
+	for _, child := range cmd.Commands() {
+		child.Hidden = true
+	}
+	return cmd
 }
 
 func printJSONTo(writer io.Writer, value any) error {
@@ -60,9 +107,19 @@ func printJSONTo(writer io.Writer, value any) error {
 	return err
 }
 
-func (c *commandContext) services() app.Services {
-	cfg := config.Load(c.config.Workspace)
-	cfg.Model.Provider = c.config.Model.Provider
-	cfg.Model.Model = c.config.Model.Model
-	return app.NewServices(cfg)
+func (c *commandContext) servicesFor(cmd *cobra.Command) service.Services {
+	cfg := config.LoadWithOverrides(c.workspace, config.Overrides{
+		Workspace:     explicitStringFlag(cmd, "workspace", c.workspace),
+		ModelProvider: explicitStringFlag(cmd, "provider", c.provider),
+		ModelName:     explicitStringFlag(cmd, "model", c.model),
+	})
+	return service.NewServices(cfg)
+}
+
+func explicitStringFlag(cmd *cobra.Command, name, value string) string {
+	flag := cmd.Flags().Lookup(name)
+	if flag == nil || !flag.Changed {
+		return ""
+	}
+	return value
 }

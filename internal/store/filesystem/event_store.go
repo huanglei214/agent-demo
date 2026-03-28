@@ -64,13 +64,23 @@ func (s EventStore) ReadAll(runID string) ([]harnessruntime.Event, error) {
 }
 
 func (s EventStore) NextSequence(runID string) (int64, error) {
-	events, err := s.ReadAll(runID)
+	path := s.paths.EventsPath(runID)
+	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 1, nil
 		}
 		return 0, err
 	}
+	defer file.Close()
 
-	return int64(len(events) + 1), nil
+	var count int64
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		count++
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, err
+	}
+	return count + 1, nil
 }

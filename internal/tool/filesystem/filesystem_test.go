@@ -33,6 +33,28 @@ func TestReadFileToolSuccess(t *testing.T) {
 	}
 }
 
+func TestReadFileToolRejectsSymlinkEscape(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("secret"), 0o644); err != nil {
+		t.Fatalf("seed outside file: %v", err)
+	}
+	linkPath := filepath.Join(workspace, "escape.txt")
+	if err := os.Symlink(outsideFile, linkPath); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	_, err := NewReadFileTool(workspace).Execute(context.Background(), mustJSON(t, map[string]any{
+		"path": "escape.txt",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "resolves outside workspace") {
+		t.Fatalf("expected symlink escape error, got %v", err)
+	}
+}
+
 func TestReadFileToolSupportsFilePathAlias(t *testing.T) {
 	t.Parallel()
 

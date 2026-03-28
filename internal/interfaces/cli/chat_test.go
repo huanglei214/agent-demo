@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huanglei214/agent-demo/internal/app"
 	"github.com/huanglei214/agent-demo/internal/config"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
+	"github.com/huanglei214/agent-demo/internal/service"
 )
 
 func TestChatCommandStartsSessionAndReplies(t *testing.T) {
@@ -70,7 +70,7 @@ func TestChatCommandDebugPrintsRunID(t *testing.T) {
 func TestRunCommandSupportsSessionFlag(t *testing.T) {
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
-	services := app.NewServices(config.Load(workspace))
+	services := service.NewServices(config.Load(workspace))
 	session, err := services.CreateSession(workspace)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
@@ -116,7 +116,7 @@ func TestRunChatLoopSupportsMultilineInput(t *testing.T) {
 		&out,
 		&errOut,
 		func(input string, output io.Writer) (chatLoopAction, error) {
-			return handleChatCommand(app.Services{}, "", input, output)
+			return handleChatCommand(service.Services{}, "", input, output)
 		},
 		func(input string, _, _ io.Writer) error {
 			got = append(got, input)
@@ -151,7 +151,7 @@ func TestRunChatLoopSupportsLargeScannerInput(t *testing.T) {
 		&out,
 		&errOut,
 		func(input string, output io.Writer) (chatLoopAction, error) {
-			return handleChatCommand(app.Services{}, "", input, output)
+			return handleChatCommand(service.Services{}, "", input, output)
 		},
 		func(input string, _, _ io.Writer) error {
 			got = append(got, input)
@@ -206,7 +206,7 @@ func TestFormatChatFailureRendersRunFailure(t *testing.T) {
 func TestLatestSessionRunIDReturnsMostRecentRun(t *testing.T) {
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
-	services := app.NewServices(config.Load(workspace))
+	services := service.NewServices(config.Load(workspace))
 
 	session, err := services.CreateSession(workspace)
 	if err != nil {
@@ -282,13 +282,13 @@ func TestReadReaderChatInputSupportsMultiline(t *testing.T) {
 func TestChatCommandSupportsSessionHistoryAndHelpers(t *testing.T) {
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
-	services := app.NewServices(config.Load(workspace))
+	services := service.NewServices(config.Load(workspace))
 
 	session, err := services.CreateSession(workspace)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if _, err := services.StartRun(app.RunRequest{
+	if _, err := services.StartRun(service.RunRequest{
 		Instruction: "你好",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -329,13 +329,13 @@ func TestChatCommandSupportsSessionHistoryAndHelpers(t *testing.T) {
 func TestSessionInspectCommandShowsMessagesAndRuns(t *testing.T) {
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
-	services := app.NewServices(config.Load(workspace))
+	services := service.NewServices(config.Load(workspace))
 
 	session, err := services.CreateSession(workspace)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if _, err := services.StartRun(app.RunRequest{
+	if _, err := services.StartRun(service.RunRequest{
 		Instruction: "你好",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -354,7 +354,7 @@ func TestSessionInspectCommandShowsMessagesAndRuns(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"--workspace", workspace, "--provider", "mock", "session", "inspect", session.ID, "--recent", "2"})
+	cmd.SetArgs([]string{"--workspace", workspace, "--provider", "mock", "debug", "session", session.ID, "--recent", "2"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("execute session inspect: %v", err)
@@ -382,11 +382,35 @@ func TestRootCommandDoesNotExposeServeSubcommand(t *testing.T) {
 	}
 }
 
+func TestRootCommandExposesChatFirstAndDebugVisibleCommands(t *testing.T) {
+	cmd, err := NewRootCommand()
+	if err != nil {
+		t.Fatalf("new root command: %v", err)
+	}
+
+	visible := map[string]bool{}
+	for _, child := range cmd.Commands() {
+		if !child.Hidden {
+			visible[child.Name()] = true
+		}
+	}
+
+	if !visible["chat"] {
+		t.Fatalf("expected chat command to remain visible")
+	}
+	if !visible["debug"] {
+		t.Fatalf("expected debug command to remain visible")
+	}
+	if visible["run"] || visible["inspect"] || visible["replay"] || visible["resume"] || visible["session"] || visible["tools"] {
+		t.Fatalf("expected legacy root commands to be hidden, got visible=%v", visible)
+	}
+}
+
 func TestInspectCommandIncludesCurrentStepAndChildRuns(t *testing.T) {
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
-	services := app.NewServices(config.Load(workspace))
-	response, err := services.StartRun(app.RunRequest{
+	services := service.NewServices(config.Load(workspace))
+	response, err := services.StartRun(service.RunRequest{
 		Instruction: "请委派一个子任务来分析这个仓库，然后给我总结",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -405,7 +429,7 @@ func TestInspectCommandIncludesCurrentStepAndChildRuns(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"--workspace", workspace, "--provider", "mock", "inspect", response.Run.ID})
+	cmd.SetArgs([]string{"--workspace", workspace, "--provider", "mock", "debug", "inspect", response.Run.ID})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("execute inspect command: %v", err)
@@ -423,8 +447,8 @@ func TestReplayCommandReturnsSummariesWhileDebugEventsRemainRaw(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("# test\n"), 0o644); err != nil {
 		t.Fatalf("seed README: %v", err)
 	}
-	services := app.NewServices(config.Load(workspace))
-	response, err := services.StartRun(app.RunRequest{
+	services := service.NewServices(config.Load(workspace))
+	response, err := services.StartRun(service.RunRequest{
 		Instruction: "请读取 README.md 并总结当前项目状态",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -442,7 +466,7 @@ func TestReplayCommandReturnsSummariesWhileDebugEventsRemainRaw(t *testing.T) {
 	var replayOut bytes.Buffer
 	replayCmd.SetOut(&replayOut)
 	replayCmd.SetErr(&replayOut)
-	replayCmd.SetArgs([]string{"--workspace", workspace, "--provider", "mock", "replay", response.Run.ID})
+	replayCmd.SetArgs([]string{"--workspace", workspace, "--provider", "mock", "debug", "replay", response.Run.ID})
 	if err := replayCmd.Execute(); err != nil {
 		t.Fatalf("execute replay command: %v", err)
 	}

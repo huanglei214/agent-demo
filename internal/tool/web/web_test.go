@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -199,7 +200,40 @@ func TestFetchToolRejectsRelativeURL(t *testing.T) {
 	}
 }
 
+func TestFetchToolRejectsLocalhostTargets(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewFetchTool().Execute(context.Background(), mustJSON(t, map[string]any{
+		"url": "http://127.0.0.1:8080/status",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "restricted address") {
+		t.Fatalf("expected restricted address error, got %v", err)
+	}
+}
+
+func TestFetchToolRejectsResolvedPrivateAddresses(t *testing.T) {
+	t.Parallel()
+
+	tool := NewFetchTool()
+	tool.resolver = staticResolver{addresses: []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}}
+
+	_, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"url": "https://weather.example.com/today",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "restricted address") {
+		t.Fatalf("expected resolved restricted address error, got %v", err)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
+
+type staticResolver struct {
+	addresses []net.IPAddr
+}
+
+func (r staticResolver) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) {
+	return r.addresses, nil
+}
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)

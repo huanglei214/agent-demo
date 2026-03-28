@@ -2,6 +2,7 @@ package memory
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -153,5 +154,58 @@ func TestDetectExplicitRememberAndRecallIdentity(t *testing.T) {
 	}
 	if !strings.Contains(recalled[0].Content, "黄磊") {
 		t.Fatalf("expected recalled identity memory to contain 黄磊, got %#v", recalled[0])
+	}
+}
+
+func TestCommitPreservesEntriesAcrossConcurrentWriters(t *testing.T) {
+	t.Parallel()
+
+	paths := store.NewPaths(t.TempDir())
+	manager := NewManager(paths)
+
+	entries := []harnessruntime.MemoryEntry{
+		{
+			ID:          "mem_a",
+			SessionID:   "session_1",
+			Scope:       "session",
+			Kind:        "fact",
+			Content:     "alpha",
+			SourceRunID: "run_a",
+			CreatedAt:   time.Now(),
+		},
+		{
+			ID:          "mem_b",
+			SessionID:   "session_1",
+			Scope:       "session",
+			Kind:        "fact",
+			Content:     "beta",
+			SourceRunID: "run_b",
+			CreatedAt:   time.Now(),
+		},
+	}
+
+	var wg sync.WaitGroup
+	for _, entry := range entries {
+		entry := entry
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := manager.Commit([]harnessruntime.MemoryEntry{entry}); err != nil {
+				t.Errorf("commit memory %s: %v", entry.ID, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	recalled, err := manager.Recall(RecallQuery{
+		SessionID: "session_1",
+		Goal:      "alpha beta",
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("recall concurrent commits: %v", err)
+	}
+	if len(recalled) != 2 {
+		t.Fatalf("expected both concurrent entries to persist, got %#v", recalled)
 	}
 }

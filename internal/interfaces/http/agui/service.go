@@ -7,15 +7,15 @@ import (
 	"os"
 	"strings"
 
-	"github.com/huanglei214/agent-demo/internal/app"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
+	"github.com/huanglei214/agent-demo/internal/service"
 )
 
 type Service struct {
-	services app.Services
+	services service.Services
 }
 
-func NewService(services app.Services) Service {
+func NewService(services service.Services) Service {
 	return Service{services: services}
 }
 
@@ -52,7 +52,7 @@ func (s Service) StreamChat(req ChatRequest, writer *SSEWriter) error {
 	observer := newChannelObserver()
 	outcomeCh := make(chan runOutcome, 1)
 	go func() {
-		response, err := s.services.StartRunStream(app.RunRequest{
+		response, err := s.services.StartRunStream(service.RunRequest{
 			Instruction: message.Content,
 			Workspace:   workspace,
 			Provider:    provider,
@@ -207,7 +207,7 @@ func lastUserMessage(messages []InputMessage) (InputMessage, error) {
 }
 
 type runOutcome struct {
-	response app.RunResponse
+	response service.RunResponse
 	err      error
 }
 

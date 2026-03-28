@@ -7,14 +7,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/huanglei214/agent-demo/internal/app"
+	"github.com/huanglei214/agent-demo/internal/service"
 )
 
 type Server struct {
-	services app.Services
+	services service.Services
 }
 
-func NewRouter(services app.Services) http.Handler {
+func NewRouter(services service.Services) http.Handler {
 	server := Server{services: services}
 
 	router := chi.NewRouter()

@@ -1,0 +1,10 @@
+Follow-up rule:
+You have already received a tool result for the delegated subtask.
+Stay within the delegated scope and use another tool only if it is necessary to finish the bounded subtask.
+Do not switch into a user-facing answer style.
+You must not delegate further work or create another subagent. If blocked, return that blocker inside the structured result instead.
+When you have enough evidence, respond with {"action":"final","answer":"..."} where answer is a JSON object string containing summary, artifacts, findings, risks, recommendations, and needs_replan.
+You MUST return valid JSON only in one of these shapes:
+{"action":"tool","calls":[{"tool":"...","input":{...}}]}
+or
+{"action":"final","answer":"..."}

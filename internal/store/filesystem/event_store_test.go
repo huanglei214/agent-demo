@@ -1,6 +1,8 @@
 package filesystem
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -83,5 +85,28 @@ func TestEventStoreNextSequenceForNewRun(t *testing.T) {
 
 	if next != 1 {
 		t.Fatalf("expected next sequence 1, got %d", next)
+	}
+}
+
+func TestEventStoreNextSequenceCountsLinesWithoutParsingJSON(t *testing.T) {
+	t.Parallel()
+
+	paths := store.NewPaths(t.TempDir())
+	eventStore := NewEventStore(paths)
+
+	path := paths.EventsPath("run_bad_json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir events dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{not-json}\n{\"ok\":true}\n"), 0o644); err != nil {
+		t.Fatalf("write events file: %v", err)
+	}
+
+	next, err := eventStore.NextSequence("run_bad_json")
+	if err != nil {
+		t.Fatalf("next sequence with malformed jsonl: %v", err)
+	}
+	if next != 3 {
+		t.Fatalf("expected next sequence 3, got %d", next)
 	}
 }

@@ -1,6 +1,7 @@
 package filesystem
 
 import (
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -115,7 +116,7 @@ func TestStateStoreSaveAndLoadRunArtifacts(t *testing.T) {
 					{Role: "system", Content: "system prompt"},
 					{Role: "user", Content: "user input"},
 				},
-				Metadata:     map[string]any{"role": "default-agent"},
+				Metadata: map[string]any{"role": "default-agent"},
 			},
 			Response: &harnessruntime.ModelResponseSnapshot{
 				Text:         `{"action":"final","answer":"done"}`,
@@ -264,5 +265,37 @@ func TestStateStoreSaveAndLoadRunArtifacts(t *testing.T) {
 	}
 	if len(recentMessages) != 1 || recentMessages[0].ID != "msg_2" {
 		t.Fatalf("unexpected recent session messages: %#v", recentMessages)
+	}
+}
+
+func TestStateStoreLoadRunWrapsNotFoundError(t *testing.T) {
+	t.Parallel()
+
+	stateStore := NewStateStore(store.NewPaths(t.TempDir()))
+	_, err := stateStore.LoadRun("run_missing")
+	if err == nil {
+		t.Fatal("expected missing run error")
+	}
+	if !errors.Is(err, harnessruntime.ErrRunNotFound) {
+		t.Fatalf("expected ErrRunNotFound, got %v", err)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected wrapped os.ErrNotExist, got %v", err)
+	}
+}
+
+func TestStateStoreLoadSessionWrapsNotFoundError(t *testing.T) {
+	t.Parallel()
+
+	stateStore := NewStateStore(store.NewPaths(t.TempDir()))
+	_, err := stateStore.LoadSession("session_missing")
+	if err == nil {
+		t.Fatal("expected missing session error")
+	}
+	if !errors.Is(err, harnessruntime.ErrSessionNotFound) {
+		t.Fatalf("expected ErrSessionNotFound, got %v", err)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected wrapped os.ErrNotExist, got %v", err)
 	}
 }

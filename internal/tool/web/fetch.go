@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -16,14 +17,20 @@ import (
 )
 
 type FetchTool struct {
-	client *http.Client
+	client   *http.Client
+	resolver ipResolver
 }
 
 var titlePattern = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 
+type ipResolver interface {
+	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
+}
+
 func NewFetchTool() FetchTool {
 	return FetchTool{
-		client: &http.Client{Timeout: 15 * time.Second},
+		client:   &http.Client{Timeout: 15 * time.Second},
+		resolver: net.DefaultResolver,
 	}
 }
 
@@ -55,6 +62,17 @@ func (t FetchTool) Execute(ctx context.Context, input json.RawMessage) (tool.Res
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return tool.Result{}, errors.New("url must be an absolute http(s) URL")
 	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return tool.Result{}, errors.New("url must be an absolute http(s) URL")
+	}
+	if err := t.validatePublicURL(ctx, parsed); err != nil {
+		return tool.Result{}, err
+	}
+
+	client := *t.client
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return t.validatePublicURL(req.Context(), req.URL)
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -62,7 +80,7 @@ func (t FetchTool) Execute(ctx context.Context, input json.RawMessage) (tool.Res
 	}
 	httpReq.Header.Set("User-Agent", "agent-demo/1.0 (+https://localhost)")
 
-	resp, err := t.client.Do(httpReq)
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return tool.Result{}, err
 	}
@@ -98,4 +116,38 @@ func (t FetchTool) Execute(ctx context.Context, input json.RawMessage) (tool.Res
 			"truncated":   truncated,
 		},
 	}, nil
+}
+
+func (t FetchTool) validatePublicURL(ctx context.Context, parsed *url.URL) error {
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return errors.New("url must be an absolute http(s) URL")
+	}
+	if strings.EqualFold(host, "localhost") {
+		return errors.New("web.fetch target resolves to a restricted address")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if isRestrictedIP(ip) {
+			return errors.New("web.fetch target resolves to a restricted address")
+		}
+		return nil
+	}
+	addresses, err := t.resolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return err
+	}
+	for _, address := range addresses {
+		if isRestrictedIP(address.IP) {
+			return errors.New("web.fetch target resolves to a restricted address")
+		}
+	}
+	return nil
+}
+
+func isRestrictedIP(ip net.IP) bool {
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified()
 }

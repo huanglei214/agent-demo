@@ -1,161 +1,126 @@
 # agent-demo
 
-本项目当前是一个单机本地运行的 Agent Harness MVP，已经具备：
+本项目是一个本地运行的 Agent Harness。当前提供三类主要使用面：
 
-- Cobra CLI 入口
-- 独立的 `cmd/cli` 与 `cmd/web` 双入口
-- 本地 `.runtime/` 工件落盘
-- `run / chat / inspect / session inspect / replay / resume / tools list / debug events` 基础命令
-- 本地 Web API 和首批调试 / 聊天页面
-- Ark / Mock provider
-- 最小 plan-driven loop：`planning -> memory recall -> context build -> prompt build -> model -> tool -> result`
-- 基于 `Session` 的本地多轮对话
-- 最小受控 delegation
-- 固定 4 条回归场景，可通过 `make verify-scenarios` 统一验证
-- `web/` 下的本地 React + Vite 调试界面骨架
+- Web 聊天与调试页面
+- Cobra CLI
+- 本地 `.runtime/` 运行工件
+
+当前核心能力包括：
+
+- `chat` 主交互入口
+- `debug` 调试命令集
+- 本地 HTTP API 与 Web UI
+- `mock` / `ark` 两种模型 provider
+- plan-driven agent loop
+- session 多轮对话
+- 受控 subagent delegation
+- 本地 skills
 
 ## 快速开始
 
-先查看 CLI：
+推荐先从 Web 开始：
 
 ```bash
-make help
+make dev
 ```
 
-创建一次本地 run：
+默认行为：
 
-```bash
-make run ARGS='verify scaffold runtime'
-```
+- API 监听 `http://127.0.0.1:8088`
+- 前端通过 Vite 本地开发服务启动
+- Web 页面会连接本地 API
 
-在已有 session 上追加一轮输入：
-
-```bash
-make run SESSION=<session-id> ARGS='继续刚才的话题'
-```
-
-启动本地交互式多轮对话：
-
-```bash
-make chat PROVIDER=mock
-```
-
-如果你想强制使用 mock provider：
-
-```bash
-make run ARGS='say hello from mock provider' PROVIDER=mock
-```
-
-查看工具列表：
-
-```bash
-make tools
-```
-
-当前默认核心工具面包括：
-
-- `fs.list_dir`：列出 workspace 内目录
-- `fs.read_file`：读取 workspace 内文件内容
-- `fs.write_file`：创建或整体覆盖 workspace 内文件
-- `fs.str_replace`：按字符串做局部替换，支持单次替换和多次替换
-- `fs.search`：按 `pattern` 或 `query` 在 workspace 内搜索路径或文件内容
-- `web.search`：联网搜索外部信息，返回结构化搜索结果
-- `web.fetch`：读取指定网页内容，返回结构化页面文本
-- `bash.exec`：在 workspace 内按受控参数执行命令
-
-工具访问级别当前分为：
-
-- `read_only`：只读工具，例如 `fs.list_dir`、`fs.read_file`、`fs.search`、`web.search`、`web.fetch`
-- `write`：写入工具，例如 `fs.write_file`、`fs.str_replace`
-- `exec`：执行工具，例如 `bash.exec`
-
-## Skills
-
-当前项目开始支持文件系统原生的 skills。
-
-约定的 skill 目录优先级为：
-
-- 项目级：`.skills/`
-- 用户级：`~/.agent-demo/skills/`
-
-每个 skill 目录的入口文件是 `SKILL.md`，并可选携带：
-
-- `references/`
-- `scripts/`
-- `assets/`
-
-第一批只内置了一个示范 skill：
-
-- `weather-lookup`
-
-它会复用 `web.search` 和 `web.fetch`，要求搜索后至少读取一个页面，不允许只返回链接。
-
-显式指定 skill 的方式：
-
-```bash
-make run PROVIDER=mock SKILL=weather-lookup ARGS='武汉天气怎么样'
-make chat PROVIDER=mock SKILL=weather-lookup
-```
-
-如果用户问题明显是在查询实时天气，运行时也会尝试自动命中 `weather-lookup`。
-
-启动本地 HTTP API：
-
-```bash
-make serve PROVIDER=mock
-```
-
-一条命令同时启动后端和前端：
+如果你想用可重复的本地验证流，改用 `mock`：
 
 ```bash
 make dev PROVIDER=mock
 ```
 
-启动本地 Web UI：
+只启动后端：
 
 ```bash
-cd web
-npm install
-npm run dev
+make serve
 ```
 
-默认情况下，Vite 会把 `/api` 和 `/healthz` 代理到 `http://127.0.0.1:8080`。
+只启动前端：
 
-当前入口分层如下：
+```bash
+make web-dev
+```
 
-- `cmd/cli`：CLI 可执行入口
-- `cmd/web`：本地 Web API 可执行入口
-- `internal/app`、`internal/runtime`、`internal/planner` 等：核心应用与运行时能力
-- `internal/interfaces/cli`、`internal/interfaces/http`：当前阶段的接口适配层
-- `internal/interfaces/http/agui`：AG-UI 聊天流的 HTTP 适配
+构建前端：
 
-查看某个 run：
+```bash
+make web-build
+```
+
+## CLI
+
+CLI 现在收敛成两层：
+
+- `harness chat`：日常对话入口
+- `harness debug ...`：调试和工件查看入口
+
+查看帮助：
+
+```bash
+make help
+```
+
+启动多轮聊天：
+
+```bash
+make chat
+```
+
+做一次单次运行：
+
+```bash
+make run ARGS='请读取 README.md 并总结当前项目状态'
+```
+
+在已有 session 上继续一轮：
+
+```bash
+make run SESSION=<session-id> ARGS='继续刚才的话题'
+```
+
+常用调试命令：
 
 ```bash
 make inspect RUN=<run-id>
-```
-
-查看某个 session：
-
-```bash
-make session-inspect SESSION=<session-id>
-```
-
-回放某个 run 的事件：
-
-```bash
 make replay RUN=<run-id>
+make debug-events RUN=<run-id>
+make session-inspect SESSION=<session-id>
+make resume RUN=<run-id>
+make tools
 ```
 
-查看某个 run 的原始事件：
+如果你直接用原始 CLI，对应命令形态是：
 
 ```bash
-make debug-events RUN=<run-id>
+harness chat
+harness debug run <instruction>
+harness debug inspect <run-id>
+harness debug replay <run-id>
+harness debug events <run-id>
+harness debug session <session-id>
+harness debug resume <run-id>
+harness debug tools
 ```
 
-## 环境变量
+## Provider 与配置
 
-真实调用 Ark 时需要提供：
+默认 `make` 命令会走 `ark`。如果你只想做本地验证，显式传：
+
+```bash
+make run PROVIDER=mock ARGS='hello'
+make chat PROVIDER=mock
+make verify-scenarios
+```
+
+使用 Ark 时常见环境变量：
 
 ```bash
 export ARK_API_KEY=your_api_key
@@ -163,174 +128,82 @@ export ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
 export ARK_MODEL_ID=your_model_id
 ```
 
-可选变量：
+可选覆盖：
 
 ```bash
 export HARNESS_PROVIDER=ark
 export HARNESS_MODEL=$ARK_MODEL_ID
+export HARNESS_MODEL_TIMEOUT_SECONDS=90
 ```
 
-如果只是本地验证流程，可以直接切到 mock：
+配置覆盖优先级：
+
+1. `~/.agent-demo/config.json`
+2. `<workspace>/.agent-demo.json`
+3. 环境变量
+4. 显式 CLI / Web 启动参数
+
+示例工作区配置：
+
+```json
+{
+  "runtime": {
+    "root": ".runtime"
+  },
+  "model": {
+    "provider": "mock",
+    "timeout_seconds": 90
+  }
+}
+```
+
+## Web UI
+
+本地 Web UI 位于 [web/](/Users/huanglei/repos/src/github.com/huanglei214/agent-demo/web)。
+
+主要页面：
+
+- `/`：chat-first 首页
+- `/chat`：聊天页别名
+- `/launchpad`：启动台
+- `/sessions/<session-id>`：session 详情
+- `/runs/<run-id>`：run 详情
+
+当前 Web 主要用于：
+
+- 发起聊天和运行
+- 查看 recent sessions / runs
+- 查看 session 消息与关联 runs
+- 查看 run inspect、replay、raw events
+- 通过 SSE 接收运行状态更新
+
+前端默认会把 `/api` 和 `/healthz` 代理到 `http://127.0.0.1:8088`。
+
+## Skills
+
+项目支持文件系统原生 skills。
+
+skill 目录优先级：
+
+- 项目级：`skills/`
+- 用户级：`~/.agent-demo/skills/`
+
+每个 skill 目录入口为 `SKILL.md`，可附带：
+
+- `references/`
+- `scripts/`
+- `assets/`
+
+显式启用 skill：
 
 ```bash
-make run ARGS='请读取 README.md 并总结当前项目状态' PROVIDER=mock
-make verify-scenarios
+make run SKILL=weather-lookup ARGS='武汉天气怎么样' PROVIDER=mock
+make chat SKILL=weather-lookup PROVIDER=mock
 ```
 
-## 最小闭环示例
+## 工具面
 
-1. 发起一次运行：
-
-```bash
-make run ARGS='请读取 README.md 并总结当前项目状态' PROVIDER=mock
-```
-
-2. 记下输出里的 `run.id`，然后查看运行工件：
-
-```bash
-make inspect RUN=<run-id>
-make replay RUN=<run-id>
-make debug-events RUN=<run-id>
-make resume RUN=<run-id>
-```
-
-这里有两个查看视角：
-
-- `make replay`：输出更适合人读的摘要时间线
-- `make debug-events`：输出原始事件 JSON，适合排障
-
-3. 查看本地工件目录：
-
-```bash
-ls .runtime/runs/<run-id>
-```
-
-你会看到 `run.json`、`state.json`、`plan.json`、`events.jsonl`、`result.json`、`summaries.json`、`memories.json`。
-如果这次运行触发了子代理委派，还会看到 `children/` 目录，里面保存每个 child run 的结构化记录。
-
-4. 启动一个多轮会话：
-
-```bash
-make chat PROVIDER=mock
-```
-
-你会先看到一行 `session_id: ...`，然后可以连续输入多轮内容。输入 `/exit` 或 `/quit` 结束会话。
-在真实 terminal 中，`chat` 现在支持：
-
-- 上下箭头回看当前 REPL 会话里的历史输入
-- 同一个 `session` 重开后，继续使用上下箭头找回之前的输入历史
-- 行尾输入 `\` 继续下一行，形成多行消息
-- `/session` 查看当前 session id
-- `/history` 查看最近 10 条会话消息，或用 `/history 20` 查看更多
-- `/clear` 清空当前终端显示
-
-例如：
-
-```text
-you> 请帮我整理下面这段需求\
-...> 并给出一个计划
-```
-
-如果要在整个 chat 会话里显式启用某个 skill：
-
-```bash
-make chat PROVIDER=mock SKILL=weather-lookup
-```
-
-5. 如果要继续之前的会话：
-
-```bash
-make chat PROVIDER=mock SESSION=<session-id>
-```
-
-或者：
-
-```bash
-make run PROVIDER=mock SESSION=<session-id> ARGS='补充一个追问'
-```
-
-6. 运行固定回归场景：
-
-```bash
-make verify-scenarios
-```
-
-当前会跑 4 条固定场景：
-
-- 基础规划
-- 文件系统工具
-- 多轮 chat
-- delegation
-
-## 本地 Web UI
-
-本地 Web UI 位于 [web/package.json](/Users/huanglei/repos/src/github.com/huanglei214/agent-demo/web/package.json)，当前是一个面向本机开发的薄页面层，重点用于：
-
-- 发起 run
-- 在首页直接查看 recent sessions / recent runs，并点进详情页
-- 在首页选择某个 session 后直接查看最近消息和关联 runs，并继续追加一轮输入
-- 通过页面右上角切换中文 / 英文，默认保留本地语言偏好
-- 通过 `/chat` 进入 chat-first 页面，直接消费 AG-UI 事件流
-- 查看 session 消息和关联 run
-- 查看 run inspect、replay timeline、raw events
-- 在 run 详情页通过 SSE 订阅增量事件，实时刷新时间线和状态指标
-
-推荐启动方式：
-
-1. 一条命令同时启动后端 API 和前端：
-
-```bash
-make dev PROVIDER=mock
-```
-
-2. 如果你想分开调试，也可以继续分别启动：
-
-```bash
-make serve PROVIDER=mock
-make web-dev
-```
-
-3. 打开 Vite 输出的本地地址，默认会进入：
-
-- `/`：Chat-first 首页，直接消费 `/api/agui/chat`
-- `/launchpad`：旧的启动台和 recent sessions / recent runs
-- `/chat`：Chat-first 页面别名
-- `/sessions/<session-id>`：Session 详情页
-- `/runs/<run-id>`：Run 详情页
-
-`Run` 详情页在首屏会先加载一次 `inspect / replay / events`，随后自动连接 `/api/runs/<run-id>/stream?after=<sequence>`，用 SSE 追增量事件；当 run 进入 `completed / failed / cancelled / blocked` 时，这条连接会自动结束。
-
-## AG-UI Chat Adapter
-
-当前项目额外提供了一条与调试 API 并存的 AG-UI 兼容聊天入口：
-
-```bash
-POST /api/agui/chat
-```
-
-这条入口的定位是“chat-first 实时体验”，而不是替换现有调试台：
-
-- `/api/agui/chat`：面向流式消息、step 和 tool call 的聊天体验
-- `/api/runs/*`、`/api/sessions/*`：面向 inspect、replay、raw events 和调试排障
-
-AG-UI 入口当前使用 HTTP + SSE 输出最小事件子集，包括：
-
-- `RUN_STARTED`
-- `MESSAGES_SNAPSHOT`
-- `STATE_SNAPSHOT`
-- `STEP_STARTED / STEP_FINISHED`
-- `TEXT_MESSAGE_START / CONTENT / END`
-- `TOOL_CALL_START / ARGS / END / RESULT`
-- `RUN_FINISHED / RUN_ERROR`
-- `CUSTOM / RAW`
-
-如果你只是要排查 run 行为，继续优先使用现有调试页和 `inspect / replay / debug events` 即可；如果你要做新的 chat-first 页面，再接 `/api/agui/chat`。
-
-这个 server 当前是单 workspace 绑定的：启动 `cmd/web` 时绑定哪个 `--workspace`，HTTP API 就只接受该 workspace 下的 session/run 请求，不支持跨 workspace 复用。
-
-## 工具说明
-
-CLI、Web UI 和 AG-UI 运行时当前共享同一套工具注册表，核心工具面固定为 8 个：
+当前默认工具：
 
 - `fs.list_dir`
 - `fs.read_file`
@@ -341,48 +214,84 @@ CLI、Web UI 和 AG-UI 运行时当前共享同一套工具注册表，核心工
 - `web.fetch`
 - `bash.exec`
 
-`fs.stat` 已经从默认工具注册表中移除，不再对模型暴露。工具清单可以通过：
+访问级别：
+
+- `read_only`
+- `write`
+- `exec`
+
+当前安全边界：
+
+- `bash.exec` 会拦截明显危险命令和命令链
+- `web.fetch` 会拒绝本地和内网地址
+- filesystem 工具会在解析 symlink 后继续校验 workspace 边界
+
+查看工具清单：
 
 ```bash
 make tools
+curl -s http://127.0.0.1:8088/api/tools
 ```
 
-或：
+## `.runtime` 工件
+
+run 级目录：
 
 ```bash
-curl -s http://127.0.0.1:8080/api/tools
+.runtime/runs/<run-id>/
 ```
 
-查看。HTTP `/api/tools` 返回的工具描述中会同时暴露 `access` 字段，当前值为 `read_only | write | exec`。
+常见文件：
 
-## `.runtime` 工件说明
+- `run.json`
+- `state.json`
+- `plan.json`
+- `events.jsonl`
+- `result.json`
+- `summaries.json`
+- `memories.json`
+- `children/`
 
-`run` 级目录位于 `.runtime/runs/<run-id>/`，常见文件包括：
+session 级目录：
 
-- `run.json`：本次运行的元信息、状态、provider、current step
-- `state.json`：恢复执行所需的中间状态，例如 `turn_count`、`resume_phase`
-- `plan.json`：当前计划和步骤状态
-- `events.jsonl`：按顺序追加的完整事件流
-- `result.json`：最终输出结果
-- `summaries.json`：compaction 生成的摘要
-- `memories.json`：本次运行的 recall、candidate、committed memory
-- `children/`：child run 的结构化结果记录
+```bash
+.runtime/sessions/<session-id>/
+```
 
-`session` 级目录位于 `.runtime/sessions/<session-id>/`：
+常见文件：
 
-- `session.json`：session 元信息
-- `messages.jsonl`：多轮 user / assistant 消息历史
-- `input.history`：TTY chat 输入历史
+- `session.json`
+- `messages.jsonl`
+- `input.history`
 
-## 说明
+## AG-UI
 
-- 当前版本会创建 `Task / Session / Run / Plan / State / Events` 工件。
-- 当前版本已经支持本地多轮对话：同一个 `Session` 下可以连续创建多个 `Run`。
-- 当前版本已经接上最小 plan-driven agent loop：会先生成结构化计划，再进行 memory recall、context build、prompt build，并支持单次文件系统工具调用后生成最终答案。
-- 当前版本已经有结构化 memory recall、compaction 和 memory candidate write-back。
-- 当前版本已经支持最小受控 delegation：父 run 可以生成 child run、记录 `subagent.spawned / subagent.completed / subagent.rejected` 事件，并在 `children/` 目录中持久化 child 结果；但它仍然不是开放式多代理系统。
-- `resume` 现在已经可以基于持久化的 `run.json`、`state.json`、`plan.json` 继续执行未完成运行，并支持恢复到 `post_tool` 之后的续跑阶段；terminal 状态和 `blocked` 状态不会自动恢复。
-- 所有运行工件默认写入仓库根目录下的 `.runtime/`。
-- session 级消息历史会保存在 `.runtime/sessions/<session-id>/messages.jsonl`，并以最近消息的形式注入后续轮次的上下文。
-- `inspect` 现在会返回 current step、最近失败事件和 child run 摘要；`session inspect` 会返回最近消息和关联 run 列表。
-- `verify-scenarios` 会固定验证基础规划、文件系统工具、多轮 chat、delegation 四条场景。
+项目提供一条 chat-first 的 AG-UI 兼容入口：
+
+```bash
+POST /api/agui/chat
+```
+
+这条入口更适合聊天流式体验；排障仍建议优先用：
+
+- `inspect`
+- `replay`
+- `debug-events`
+- Web 的 run / session 详情页
+
+## 验证
+
+常用验证命令：
+
+```bash
+make build
+make verify-scenarios
+go test ./...
+```
+
+当前固定回归场景包括：
+
+- 基础规划
+- 文件系统工具
+- 多轮 chat
+- delegation

@@ -502,7 +502,7 @@ export function ChatPage({
         <div className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-[#212121] via-[#212121] to-transparent pt-10 pb-6 px-4 z-10 pointer-events-none transition-all duration-300 ${!conversationStarted ? 'translate-y-[-20vh]' : ''}`}>
           <form className="chat-composer-shell max-w-3xl mx-auto w-full relative pointer-events-auto" onSubmit={handleSubmit}>
             <div className="chat-composer rounded-3xl bg-[#303030] shadow-lg flex items-end px-4 py-3 gap-3">
-              <button className="text-gray-400 hover:text-white transition-colors flex-shrink-0 h-[32px] w-[32px] flex items-center justify-center rounded-full hover:bg-white/10" type="button" aria-label={copy.chat.newChat} onClick={handleNewChat}>
+              <button className="text-gray-400 hover:text-white transition-colors flex-shrink-0 self-center h-[32px] w-[32px] flex items-center justify-center rounded-full hover:bg-white/10" type="button" aria-label={copy.chat.newChat} onClick={handleNewChat}>
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="block m-auto">
                   <path d="M12 5V19M5 12H19" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>

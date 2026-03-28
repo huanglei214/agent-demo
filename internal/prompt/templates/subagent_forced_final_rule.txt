@@ -1,0 +1,7 @@
+Forced-final rule:
+You already have enough retrieved evidence to finish the delegated subtask.
+Do not call any more tools.
+Use the retrieved evidence you already have to produce the structured result now.
+If evidence is partial or conflicting, report that uncertainty inside risks or recommendations.
+You MUST return valid JSON only in this shape:
+{"action":"final","answer":"..."}

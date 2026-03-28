@@ -6,7 +6,7 @@ PROVIDER ?= ark
 MODEL ?=
 WORKSPACE ?= $(CURDIR)
 HOST ?= 127.0.0.1
-PORT ?= 8080
+PORT ?= 8088
 
 .PHONY: help build tidy run chat serve dev inspect session-inspect replay resume tools debug-events verify-scenarios web-dev web-build clean-runtime clean-cache
 
@@ -21,7 +21,7 @@ tidy:
 
 run:
 	@if [ -z "$(ARGS)" ]; then echo "usage: make run ARGS='your instruction'"; exit 1; fi
-	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" --provider "$(PROVIDER)" $(if $(MODEL),--model "$(MODEL)",) run $(if $(SESSION),--session "$(SESSION)",) $(if $(SKILL),--skill "$(SKILL)",) "$(ARGS)"
+	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" --provider "$(PROVIDER)" $(if $(MODEL),--model "$(MODEL)",) debug run $(if $(SESSION),--session "$(SESSION)",) $(if $(SKILL),--skill "$(SKILL)",) "$(ARGS)"
 
 chat:
 	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" --provider "$(PROVIDER)" $(if $(MODEL),--model "$(MODEL)",) chat $(if $(SESSION),--session "$(SESSION)",) $(if $(SKILL),--skill "$(SKILL)",) $(if $(DEBUG),--debug,)
@@ -35,29 +35,29 @@ dev:
 
 inspect:
 	@if [ -z "$(RUN)" ]; then echo "usage: make inspect RUN=<run-id>"; exit 1; fi
-	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" inspect "$(RUN)"
+	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" debug inspect "$(RUN)"
 
 session-inspect:
 	@if [ -z "$(SESSION)" ]; then echo "usage: make session-inspect SESSION=<session-id>"; exit 1; fi
-	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" session inspect "$(SESSION)"
+	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" debug session "$(SESSION)"
 
 replay:
 	@if [ -z "$(RUN)" ]; then echo "usage: make replay RUN=<run-id>"; exit 1; fi
-	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" replay "$(RUN)"
+	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" debug replay "$(RUN)"
 
 resume:
 	@if [ -z "$(RUN)" ]; then echo "usage: make resume RUN=<run-id>"; exit 1; fi
-	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" resume "$(RUN)"
+	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" debug resume "$(RUN)"
 
 tools:
-	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" tools list
+	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" debug tools
 
 debug-events:
 	@if [ -z "$(RUN)" ]; then echo "usage: make debug-events RUN=<run-id>"; exit 1; fi
 	@$(CACHE_ENV) $(GO) run $(CLI_APP) --workspace "$(WORKSPACE)" debug events "$(RUN)"
 
 verify-scenarios:
-	@$(CACHE_ENV) $(GO) test ./internal/app -run TestScenarioRegression -v
+	@$(CACHE_ENV) $(GO) test ./internal/service -run TestScenarioRegression -v
 
 web-dev:
 	@cd web && npm run dev

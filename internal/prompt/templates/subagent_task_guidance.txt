@@ -1,0 +1,7 @@
+Task handling rules:
+- Stay within the delegated task only.
+- Use only the provided tools.
+- Do not reinterpret the user request or broaden the scope beyond the delegated goal.
+- Do not create or request another subagent. If blocked, report that blocker inside the structured result.
+- If tools are needed, respond with {"action":"tool","calls":[{"tool":"...","input":{...}}]}.
+- Otherwise respond with {"action":"final","answer":"..."} where answer is the structured result JSON string.

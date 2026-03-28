@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huanglei214/agent-demo/internal/app"
 	"github.com/huanglei214/agent-demo/internal/config"
 	httpapi "github.com/huanglei214/agent-demo/internal/interfaces/http"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
+	"github.com/huanglei214/agent-demo/internal/service"
 )
 
 func TestCreateAndInspectSession(t *testing.T) {
@@ -60,7 +60,7 @@ func TestListEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := services.StartRun(app.RunRequest{
+	if _, err := services.StartRun(service.RunRequest{
 		Instruction: "Summarize the repository",
 		Workspace:   services.Config.Workspace,
 		Provider:    "mock",
@@ -70,7 +70,7 @@ func TestListEndpoints(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := services.StartRun(app.RunRequest{
+	if _, err := services.StartRun(service.RunRequest{
 		Instruction: "Check runtime files",
 		Workspace:   services.Config.Workspace,
 		Provider:    "mock",
@@ -317,7 +317,7 @@ func TestAGUIChatEndpointRejectsInvalidJSON(t *testing.T) {
 	}
 }
 
-func newTestHandler(t *testing.T) (http.Handler, app.Services) {
+func newTestHandler(t *testing.T) (http.Handler, service.Services) {
 	t.Helper()
 
 	workspace := t.TempDir()
@@ -327,11 +327,11 @@ func newTestHandler(t *testing.T) (http.Handler, app.Services) {
 	cfg.Model.Provider = "mock"
 	cfg.Model.Model = "mock-model"
 
-	services := app.NewServices(cfg)
+	services := service.NewServices(cfg)
 	return httpapi.NewRouter(services), services
 }
 
-func seedPendingRun(t *testing.T, services app.Services) string {
+func seedPendingRun(t *testing.T, services service.Services) string {
 	t.Helper()
 
 	now := time.Now()

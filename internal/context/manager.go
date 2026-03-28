@@ -7,6 +7,8 @@ import (
 	"time"
 
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 type Item struct {
@@ -52,12 +54,14 @@ type CompactInput struct {
 
 type Manager struct{}
 
+var titleCaser = cases.Title(language.Und, cases.NoLower)
+
 const (
-	maxConversationMessages      = 6
-	maxUserMessageRunes          = 600
-	maxAssistantMessageRunes     = 900
-	maxConversationExcerptHead   = 500
-	maxConversationExcerptTail   = 220
+	maxConversationMessages    = 6
+	maxUserMessageRunes        = 600
+	maxAssistantMessageRunes   = 900
+	maxConversationExcerptHead = 500
+	maxConversationExcerptTail = 220
 )
 
 func NewManager() Manager {
@@ -112,7 +116,7 @@ func (m Manager) Build(input BuildInput) ModelContext {
 	for _, summary := range input.Summaries {
 		summaryItems = append(summaryItems, Item{
 			Kind:    "summary",
-			Title:   strings.Title(summary.Scope) + " Summary",
+			Title:   titleCaser.String(summary.Scope) + " Summary",
 			Content: summary.Content,
 		})
 	}
@@ -138,14 +142,14 @@ func (m Manager) Build(input BuildInput) ModelContext {
 		Summaries: summaryItems,
 		Recent:    recentItems,
 		Metadata: map[string]any{
-			"pinned_count":            len(pinned),
-			"message_count":           len(messageItems),
-			"message_source_count":    len(input.Messages),
-			"conversation_omitted":    messagesOmitted,
-			"plan_count":              len(planItems),
-			"memory_count":            len(memoryItems),
-			"summary_count":           len(summaryItems),
-			"recent_count":            len(recentItems),
+			"pinned_count":         len(pinned),
+			"message_count":        len(messageItems),
+			"message_source_count": len(input.Messages),
+			"conversation_omitted": messagesOmitted,
+			"plan_count":           len(planItems),
+			"memory_count":         len(memoryItems),
+			"summary_count":        len(summaryItems),
+			"recent_count":         len(recentItems),
 		},
 	}
 }
@@ -160,7 +164,7 @@ func buildConversationItems(messages []harnessruntime.SessionMessage) []Item {
 	for _, message := range messages[start:] {
 		items = append(items, Item{
 			Kind:    "message",
-			Title:   strings.Title(string(message.Role)),
+			Title:   titleCaser.String(string(message.Role)),
 			Content: summarizeSessionMessageContent(message),
 		})
 	}

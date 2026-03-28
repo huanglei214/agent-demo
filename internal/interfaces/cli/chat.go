@@ -13,8 +13,8 @@ import (
 	"github.com/peterh/liner"
 	"github.com/spf13/cobra"
 
-	"github.com/huanglei214/agent-demo/internal/app"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
+	"github.com/huanglei214/agent-demo/internal/service"
 )
 
 func newChatCommand(ctx *commandContext) *cobra.Command {
@@ -29,12 +29,12 @@ func newChatCommand(ctx *commandContext) *cobra.Command {
 		Use:   "chat",
 		Short: "Start or continue an interactive multi-turn chat session",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			services := ctx.services()
+			services := ctx.servicesFor(cmd)
 			out := cmd.OutOrStdout()
 			errOut := cmd.ErrOrStderr()
 
 			if strings.TrimSpace(sessionID) == "" {
-				session, err := services.CreateSession(ctx.config.Workspace)
+				session, err := services.CreateSession(services.Config.Workspace)
 				if err != nil {
 					return err
 				}
@@ -56,11 +56,11 @@ func newChatCommand(ctx *commandContext) *cobra.Command {
 					return handleChatCommand(services, sessionID, input, output)
 				},
 				func(input string, output, errorOutput io.Writer) error {
-					response, err := services.StartRun(app.RunRequest{
+					response, err := services.StartRun(service.RunRequest{
 						Instruction: input,
-						Workspace:   ctx.config.Workspace,
-						Provider:    ctx.config.Model.Provider,
-						Model:       ctx.config.Model.Model,
+						Workspace:   services.Config.Workspace,
+						Provider:    services.Config.Model.Provider,
+						Model:       services.Config.Model.Model,
 						MaxTurns:    maxTurns,
 						SessionID:   sessionID,
 						Skill:       skillName,
@@ -85,7 +85,7 @@ func newChatCommand(ctx *commandContext) *cobra.Command {
 					}
 					return nil
 				},
-				ctx.services().Paths.SessionInputHistoryPath(sessionID),
+				services.Paths.SessionInputHistoryPath(sessionID),
 			)
 		},
 	}
@@ -320,7 +320,7 @@ func ttyInputFiles(in io.Reader, out io.Writer) (*os.File, *os.File, bool, error
 	return inFile, outFile, true, nil
 }
 
-func handleChatCommand(services app.Services, sessionID, input string, out io.Writer) (chatLoopAction, error) {
+func handleChatCommand(services service.Services, sessionID, input string, out io.Writer) (chatLoopAction, error) {
 	command := strings.TrimSpace(input)
 	switch {
 	case command == "/exit" || command == "/quit":
@@ -367,7 +367,7 @@ func handleChatCommand(services app.Services, sessionID, input string, out io.Wr
 	}
 }
 
-func renderLatestChatFailure(services app.Services, sessionID string) (string, error) {
+func renderLatestChatFailure(services service.Services, sessionID string) (string, error) {
 	sessionInfo, err := services.InspectSession(sessionID, 1)
 	if err != nil {
 		return "", err
@@ -386,7 +386,7 @@ func renderLatestChatFailure(services app.Services, sessionID string) (string, e
 	return formatChatFailure(*inspect.RecentFailure), nil
 }
 
-func latestSessionRunID(services app.Services, sessionID string) (string, error) {
+func latestSessionRunID(services service.Services, sessionID string) (string, error) {
 	sessionInfo, err := services.InspectSession(sessionID, 1)
 	if err != nil {
 		return "", err

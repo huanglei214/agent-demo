@@ -83,17 +83,15 @@ func (m Manager) Recall(query RecallQuery) ([]harnessruntime.MemoryEntry, error)
 }
 
 func (m Manager) Commit(entries []harnessruntime.MemoryEntry) error {
-	existing, err := m.store.Load()
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if containsMemory(existing, entry) {
-			continue
+	return m.store.Update(func(existing []harnessruntime.MemoryEntry) ([]harnessruntime.MemoryEntry, error) {
+		for _, entry := range entries {
+			if containsMemory(existing, entry) {
+				continue
+			}
+			existing = append(existing, entry)
 		}
-		existing = append(existing, entry)
-	}
-	return m.store.Save(existing)
+		return existing, nil
+	})
 }
 
 func (m Manager) DetectExplicitRemember(input ExplicitRememberInput) ([]harnessruntime.MemoryCandidate, string, bool) {

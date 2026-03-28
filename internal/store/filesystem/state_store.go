@@ -3,6 +3,7 @@ package filesystem
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,6 +76,9 @@ func (s StateStore) AppendModelCall(call harnessruntime.ModelCall) error {
 func (s StateStore) LoadRun(runID string) (harnessruntime.Run, error) {
 	var run harnessruntime.Run
 	err := readJSON(s.paths.RunPath(runID), &run)
+	if errors.Is(err, os.ErrNotExist) {
+		return run, harnessruntime.NewRunNotFoundError(runID, err)
+	}
 	return run, err
 }
 
@@ -87,6 +91,9 @@ func (s StateStore) LoadTask(taskID string) (harnessruntime.Task, error) {
 func (s StateStore) LoadSession(sessionID string) (harnessruntime.Session, error) {
 	var session harnessruntime.Session
 	err := readJSON(s.paths.SessionPath(sessionID), &session)
+	if errors.Is(err, os.ErrNotExist) {
+		return session, harnessruntime.NewSessionNotFoundError(sessionID, err)
+	}
 	return session, err
 }
 

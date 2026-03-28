@@ -232,7 +232,7 @@ const dictionaries: Record<Language, Dictionary> = {
         chat: "/chat",
         session: "/sessions/<session-id>",
         run: "/runs/<run-id>",
-        api: "/api/* via Vite proxy -> 127.0.0.1:8080",
+        api: "/api/* via Vite proxy -> 127.0.0.1:8088",
       },
       language: {
         label: "Language",
@@ -420,7 +420,7 @@ const dictionaries: Record<Language, Dictionary> = {
         chat: "/chat",
         session: "/sessions/<session-id>",
         run: "/runs/<run-id>",
-        api: "/api/* 通过 Vite 代理到 127.0.0.1:8080",
+        api: "/api/* 通过 Vite 代理到 127.0.0.1:8088",
       },
       language: {
         label: "语言",

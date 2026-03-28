@@ -24,17 +24,18 @@
 - **THEN** 系统 MUST 展示一个 chat-first 页面作为默认入口
 - **THEN** 页面 MUST 展示最近的 `Session` 历史
 - **THEN** 用户 MUST 可以直接选择某个 `Session` 继续对话，或发起新的聊天
+- **THEN** 页面 MAY 将 run/session 调试能力以内嵌调试抽屉的方式提供，而不是独立详情页
 
-#### Scenario: 打开启动台时查看最近入口
-- **WHEN** 用户打开独立的启动台页面
+#### Scenario: 在 chat-first 入口查看最近活动
+- **WHEN** 用户打开 chat-first 页面
 - **THEN** 系统 MUST 展示最近的 `Session` 列表
-- **THEN** 系统 MUST 展示最近的 `Run` 列表
-- **THEN** 用户 MUST 可以通过点击列表项直接进入对应详情页
+- **THEN** 系统 MAY 展示最近的 `Run` 或等效调试入口
+- **THEN** 用户 MUST 可以从该入口继续已有对话或打开相关调试视图
 
 #### Scenario: 调试台与聊天入口并存
 - **WHEN** 系统新增 AG-UI 聊天入口
 - **THEN** 现有基于 `sessions / runs / replay / events` 的调试台能力 MUST 继续可用
-- **THEN** 系统 MUST 不要求现有本地 Web UI 页面全部迁移到 AG-UI 才能工作
+- **THEN** 系统 MAY 将这些调试能力收敛到 chat-first 页面中的统一调试抽屉或等效内嵌视图
 
 ### Requirement: 会话与运行详情查看
 系统 MUST 在 Web UI 中展示 `Session` 和 `Run` 的核心信息，便于调试和观察执行过程。
@@ -42,18 +43,18 @@
 #### Scenario: 查看 session 详情
 - **WHEN** 用户在 Web UI 中打开某个 `Session`
 - **THEN** 系统 MUST 展示最近消息
-- **THEN** 系统 MUST 展示关联的 `Run` 列表
+- **THEN** 系统 MUST 提供查看关联 `Run` 信息的入口或内嵌视图
 
 #### Scenario: chat-first 页面接入 AG-UI 链路
 - **WHEN** 用户通过 chat-first 页面发起一次对话
 - **THEN** 系统 MUST 通过 AG-UI 兼容事件流实时展示消息、步骤和工具活动
 - **THEN** 系统 MUST 允许前端同时获得聊天事件流与现有 run/session 标识
-- **THEN** 用户 MUST 仍然可以跳转到现有 run/session 调试页查看 inspect、replay 和原始事件
+- **THEN** 用户 MUST 可以查看 inspect、原始事件和模型调用等调试信息，无论这些信息呈现在独立页面还是内嵌调试视图中
 
 #### Scenario: 查看 run 详情
 - **WHEN** 用户在 Web UI 中打开某个 `Run`
 - **THEN** 系统 MUST 展示 `Run` 状态、当前步骤、计划、结果和 child run 摘要
-- **THEN** 系统 MUST 提供摘要时间线与原始事件两个视图
+- **THEN** 系统 MUST 提供摘要时间线、原始事件或等效调试信息视图
 
 #### Scenario: 查看正在执行中的 run 详情
 - **WHEN** 用户在 Web UI 中打开一个仍在执行中的 `Run`
@@ -62,7 +63,7 @@
 - **THEN** 当该 `Run` 进入 terminal 状态时，系统 MUST 结束增量订阅
 
 #### Scenario: 增量事件流短暂断开后恢复
-- **WHEN** `Run` 详情页的 SSE 连接发生瞬时中断，且该 `Run` 还未进入 terminal 状态
+- **WHEN** `Run` 调试视图的 SSE 连接发生瞬时中断，且该 `Run` 还未进入 terminal 状态
 - **THEN** Web UI MUST 自动发起重连
 - **THEN** 重连时 MUST 从当前已接收的最大 `sequence` 之后继续订阅
 - **THEN** Web UI MUST 避免重复追加已经收到过的事件

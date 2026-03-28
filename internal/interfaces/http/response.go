@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
 )
 
 type errorResponse struct {
@@ -50,8 +52,10 @@ func statusForError(err error) (int, string) {
 	switch {
 	case err == nil:
 		return http.StatusOK, ""
-	case errors.Is(err, os.ErrNotExist), os.IsNotExist(err):
+	case errors.Is(err, harnessruntime.ErrRunNotFound), errors.Is(err, harnessruntime.ErrSessionNotFound), errors.Is(err, os.ErrNotExist), os.IsNotExist(err):
 		return http.StatusNotFound, "not_found"
+	case errors.Is(err, harnessruntime.ErrUnsupportedProvider):
+		return http.StatusBadRequest, "invalid_request"
 	}
 
 	message := strings.ToLower(err.Error())
