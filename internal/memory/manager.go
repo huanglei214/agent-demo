@@ -41,7 +41,7 @@ func NewManager(paths store.Paths) Manager {
 }
 
 func (m Manager) Recall(query RecallQuery) ([]harnessruntime.MemoryEntry, error) {
-	entries, err := m.store.Load()
+	entries, err := m.store.LoadRelevant(query.SessionID)
 	if err != nil {
 		return nil, err
 	}

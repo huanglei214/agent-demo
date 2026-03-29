@@ -62,6 +62,14 @@ func (p Paths) SessionMessagesPath(sessionID string) string {
 	return filepath.Join(p.SessionDir(sessionID), "messages.jsonl")
 }
 
+func (p Paths) SessionRunsDir(sessionID string) string {
+	return filepath.Join(p.SessionDir(sessionID), "runs")
+}
+
+func (p Paths) SessionRunPath(sessionID, runID string) string {
+	return filepath.Join(p.SessionRunsDir(sessionID), runID+".json")
+}
+
 func (p Paths) SessionInputHistoryPath(sessionID string) string {
 	return filepath.Join(p.SessionDir(sessionID), "input.history")
 }
@@ -96,6 +104,18 @@ func (p Paths) SummariesPath(runID string) string {
 
 func (p Paths) MemoriesPath() string {
 	return filepath.Join(p.root, "memories.json")
+}
+
+func (p Paths) MemoriesShardDir() string {
+	return filepath.Join(p.root, "memories.d")
+}
+
+func (p Paths) SharedMemoriesPath() string {
+	return filepath.Join(p.MemoriesShardDir(), "shared.json")
+}
+
+func (p Paths) SessionMemoriesPath(sessionID string) string {
+	return filepath.Join(p.MemoriesShardDir(), "sessions", sessionID+".json")
 }
 
 func (p Paths) RunMemoriesPath(runID string) string {

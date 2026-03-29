@@ -1,7 +1,6 @@
 package filesystem
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"os"
@@ -34,6 +33,9 @@ func (s StateStore) SaveRun(run harnessruntime.Run) error {
 		path = filepath.Join(s.paths.ChildRunDir(run.ParentRunID, run.ID), "run.json")
 	}
 	if err := writeJSON(path, run); err != nil {
+		return err
+	}
+	if err := writeSessionRunIndex(s.paths, run); err != nil {
 		return err
 	}
 	if strings.TrimSpace(run.ParentRunID) != "" {
@@ -106,7 +108,7 @@ func (s StateStore) LoadSessionMessages(sessionID string) ([]harnessruntime.Sess
 	defer file.Close()
 
 	messages := make([]harnessruntime.SessionMessage, 0)
-	scanner := bufio.NewScanner(file)
+	scanner := newJSONLScanner(file)
 	for scanner.Scan() {
 		var message harnessruntime.SessionMessage
 		if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
@@ -168,7 +170,7 @@ func (s StateStore) LoadModelCalls(runID string) ([]harnessruntime.ModelCall, er
 	defer file.Close()
 
 	calls := make([]harnessruntime.ModelCall, 0)
-	scanner := bufio.NewScanner(file)
+	scanner := newJSONLScanner(file)
 	for scanner.Scan() {
 		var call harnessruntime.ModelCall
 		if err := json.Unmarshal(scanner.Bytes(), &call); err != nil {
@@ -214,6 +216,13 @@ func appendJSONL(path string, value any) error {
 	}
 
 	return file.Sync()
+}
+
+func writeSessionRunIndex(paths store.Paths, run harnessruntime.Run) error {
+	if strings.TrimSpace(run.SessionID) == "" {
+		return nil
+	}
+	return writeJSON(paths.SessionRunPath(run.SessionID, run.ID), run)
 }
 
 func readJSON(path string, out any) error {

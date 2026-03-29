@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
@@ -40,6 +41,26 @@ func (s FileStore) Load() ([]harnessruntime.MemoryEntry, error) {
 		return nil, err
 	}
 	return entries, nil
+}
+
+func (s FileStore) LoadRelevant(sessionID string) ([]harnessruntime.MemoryEntry, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return s.Load()
+	}
+
+	shared, sharedErr := s.loadShard(s.sharedPath())
+	sessionEntries, sessionErr := s.loadShard(s.sessionPath(sessionID))
+	switch {
+	case sharedErr == nil || sessionErr == nil:
+		return append(shared, sessionEntries...), nil
+	case errors.Is(sharedErr, os.ErrNotExist) && errors.Is(sessionErr, os.ErrNotExist):
+		return s.Load()
+	case sharedErr != nil && !errors.Is(sharedErr, os.ErrNotExist):
+		return nil, sharedErr
+	default:
+		return nil, sessionErr
+	}
 }
 
 func (s FileStore) Save(entries []harnessruntime.MemoryEntry) error {
@@ -105,7 +126,41 @@ func (s FileStore) write(entries []harnessruntime.MemoryEntry) error {
 	if err := tmpFile.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, s.path)
+	if err := os.Rename(tmpPath, s.path); err != nil {
+		return err
+	}
+	return s.writeShards(entries)
+}
+
+func (s FileStore) writeShards(entries []harnessruntime.MemoryEntry) error {
+	if err := os.MkdirAll(s.shardDir(), 0o755); err != nil {
+		return err
+	}
+	sessionEntries := make(map[string][]harnessruntime.MemoryEntry)
+	sharedEntries := make([]harnessruntime.MemoryEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Scope == "session" && strings.TrimSpace(entry.SessionID) != "" {
+			sessionEntries[entry.SessionID] = append(sessionEntries[entry.SessionID], entry)
+			continue
+		}
+		sharedEntries = append(sharedEntries, entry)
+	}
+	if err := writeJSONFile(s.sharedPath(), sharedEntries); err != nil {
+		return err
+	}
+	sessionDir := filepath.Dir(s.sessionPath("placeholder"))
+	if err := os.RemoveAll(sessionDir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		return err
+	}
+	for sessionID, items := range sessionEntries {
+		if err := writeJSONFile(s.sessionPath(sessionID), items); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s FileStore) withLock(fn func() error) error {
@@ -152,4 +207,41 @@ func removeStaleLock(lockPath string, now time.Time) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func (s FileStore) shardDir() string {
+	return filepath.Dir(s.sharedPath())
+}
+
+func (s FileStore) sharedPath() string {
+	root := filepath.Dir(s.path)
+	return filepath.Join(root, "memories.d", "shared.json")
+}
+
+func (s FileStore) sessionPath(sessionID string) string {
+	root := filepath.Dir(s.path)
+	return filepath.Join(root, "memories.d", "sessions", sessionID+".json")
+}
+
+func (s FileStore) loadShard(path string) ([]harnessruntime.MemoryEntry, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var entries []harnessruntime.MemoryEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+func writeJSONFile(path string, value any) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o644)
 }

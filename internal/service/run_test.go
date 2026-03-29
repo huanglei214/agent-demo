@@ -7,14 +7,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/huanglei214/agent-demo/internal/agent"
 	"github.com/huanglei214/agent-demo/internal/config"
 	"github.com/huanglei214/agent-demo/internal/memory"
 	"github.com/huanglei214/agent-demo/internal/model"
 	arkmodel "github.com/huanglei214/agent-demo/internal/model/ark"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
+	"github.com/huanglei214/agent-demo/internal/store"
 	toolruntime "github.com/huanglei214/agent-demo/internal/tool"
 )
 
@@ -204,7 +207,11 @@ func TestStartRunRoutesRememberRequestsToMemory(t *testing.T) {
 	assertEventAbsent(t, events, "tool.called")
 	assertEventAbsent(t, events, "fs.file_created")
 
-	recalled, err := services.MemoryManager.Recall(memory.RecallQuery{
+	executor, ok := services.Runner.(agent.Executor)
+	if !ok {
+		t.Fatalf("expected runner to be agent.Executor, got %T", services.Runner)
+	}
+	recalled, err := executor.MemoryManager.Recall(memory.RecallQuery{
 		SessionID: response.Run.SessionID,
 		Goal:      "我是谁",
 		Limit:     5,
@@ -221,22 +228,23 @@ func TestStartRunInterceptsMemoryLikeWriteFileToolInConversationMode(t *testing.
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
 	cfg := config.Load(workspace)
-	services := NewServices(cfg)
-	services.ModelFactory = func() (model.Model, error) {
-		return staticActionModel{
-			response: model.Action{
-				Action: "tool",
-				Calls: []model.ToolCall{{
-					Tool: "fs.write_file",
-					Input: map[string]any{
-						"path":      "user_info.txt",
-						"content":   "我已记住你的名字：黄磊",
-						"overwrite": true,
-					},
-				}},
-			},
-		}, nil
-	}
+	services := newTestServices(t, cfg, func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return staticActionModel{
+				response: model.Action{
+					Action: "tool",
+					Calls: []model.ToolCall{{
+						Tool: "fs.write_file",
+						Input: map[string]any{
+							"path":      "user_info.txt",
+							"content":   "我已记住你的名字：黄磊",
+							"overwrite": true,
+						},
+					}},
+				},
+			}, nil
+		}
+	})
 
 	response, err := services.StartRun(RunRequest{
 		Instruction: "我是黄磊，请记住",
@@ -358,15 +366,16 @@ func TestExecuteRunMarksFailedRunAndPlanStepOnModelError(t *testing.T) {
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
 	cfg := config.Load(workspace)
-	services := NewServices(cfg)
-	services.ModelFactory = func() (model.Model, error) {
-		return failingModel{
-			err: &arkmodel.Error{
-				Kind:    arkmodel.ErrorKindTimeout,
-				Message: "request timed out",
-			},
-		}, nil
-	}
+	services := newTestServices(t, cfg, func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return failingModel{
+				err: &arkmodel.Error{
+					Kind:    arkmodel.ErrorKindTimeout,
+					Message: "request timed out",
+				},
+			}, nil
+		}
+	})
 
 	now := time.Now()
 	task := harnessruntime.Task{
@@ -463,22 +472,23 @@ func TestExecuteRunRecordsStructuredToolFailureDetails(t *testing.T) {
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
 	cfg := config.Load(workspace)
-	services := NewServices(cfg)
-	services.ModelFactory = func() (model.Model, error) {
-		return staticActionModel{
-			response: model.Action{
-				Action: "tool",
-				Calls: []model.ToolCall{{
-					Tool: "bash.exec",
-					Input: map[string]any{
-						"command":         "sleep 2",
-						"workdir":         ".",
-						"timeout_seconds": 1,
-					},
-				}},
-			},
-		}, nil
-	}
+	services := newTestServices(t, cfg, func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return staticActionModel{
+				response: model.Action{
+					Action: "tool",
+					Calls: []model.ToolCall{{
+						Tool: "bash.exec",
+						Input: map[string]any{
+							"command":         "sleep 2",
+							"workdir":         ".",
+							"timeout_seconds": 1,
+						},
+					}},
+				},
+			}, nil
+		}
+	})
 
 	now := time.Now()
 	task, session, run, plan, state := seedStoredRun(t, services, workspace, now, harnessruntime.RunPending, "run_tool_timeout")
@@ -565,35 +575,36 @@ func TestStartRunAllowsFollowUpToolCallBeforeFinalAnswer(t *testing.T) {
 	}
 
 	cfg := config.Load(workspace)
-	services := NewServices(cfg)
-	services.ModelFactory = func() (model.Model, error) {
-		return &actionSequenceModel{
-			responses: []model.Action{
-				{
-					Action: "tool",
-					Calls: []model.ToolCall{{
-						Tool: "fs.search",
-						Input: map[string]any{
-							"query": "weather.txt",
-						},
-					}},
+	services := newTestServices(t, cfg, func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return &actionSequenceModel{
+				responses: []model.Action{
+					{
+						Action: "tool",
+						Calls: []model.ToolCall{{
+							Tool: "fs.search",
+							Input: map[string]any{
+								"query": "weather.txt",
+							},
+						}},
+					},
+					{
+						Action: "tool",
+						Calls: []model.ToolCall{{
+							Tool: "fs.read_file",
+							Input: map[string]any{
+								"path": "weather.txt",
+							},
+						}},
+					},
+					{
+						Action: "final",
+						Answer: "Wuhan weather is cloudy and 22C.",
+					},
 				},
-				{
-					Action: "tool",
-					Calls: []model.ToolCall{{
-						Tool: "fs.read_file",
-						Input: map[string]any{
-							"path": "weather.txt",
-						},
-					}},
-				},
-				{
-					Action: "final",
-					Answer: "Wuhan weather is cloudy and 22C.",
-				},
-			},
-		}, nil
-	}
+			}, nil
+		}
+	})
 
 	response, err := services.StartRun(RunRequest{
 		Instruction: "武汉天气怎么样",
@@ -625,17 +636,18 @@ func TestStartRunActivatesExplicitSkillAndNarrowsPromptTools(t *testing.T) {
 	seedWeatherSkill(t, workspace)
 
 	cfg := config.Load(workspace)
-	services := NewServices(cfg)
 	seen := &capturedModelRequest{}
-	services.ModelFactory = func() (model.Model, error) {
-		return &inspectingModel{
-			captured: seen,
-			response: model.Action{
-				Action: "final",
-				Answer: "天气查询技能已激活。",
-			},
-		}, nil
-	}
+	services := newTestServices(t, cfg, func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return &inspectingModel{
+				captured: seen,
+				response: model.Action{
+					Action: "final",
+					Answer: "天气查询技能已激活。",
+				},
+			}, nil
+		}
+	})
 
 	response, err := services.StartRun(RunRequest{
 		Instruction: "请帮我查武汉天气",
@@ -674,15 +686,16 @@ func TestStartRunAutoMatchesWeatherSkill(t *testing.T) {
 	seedWeatherSkill(t, workspace)
 
 	cfg := config.Load(workspace)
-	services := NewServices(cfg)
-	services.ModelFactory = func() (model.Model, error) {
-		return &inspectingModel{
-			response: model.Action{
-				Action: "final",
-				Answer: "根据天气技能进行了查询准备。",
-			},
-		}, nil
-	}
+	services := newTestServices(t, cfg, func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return &inspectingModel{
+				response: model.Action{
+					Action: "final",
+					Answer: "根据天气技能进行了查询准备。",
+				},
+			}, nil
+		}
+	})
 
 	response, err := services.StartRun(RunRequest{
 		Instruction: "武汉天气怎么样",
@@ -711,20 +724,21 @@ func TestStartRunRejectsToolOutsideActiveSkillAllowlist(t *testing.T) {
 	seedWeatherSkill(t, workspace)
 
 	cfg := config.Load(workspace)
-	services := NewServices(cfg)
-	services.ModelFactory = func() (model.Model, error) {
-		return staticActionModel{
-			response: model.Action{
-				Action: "tool",
-				Calls: []model.ToolCall{{
-					Tool: "fs.read_file",
-					Input: map[string]any{
-						"path": "README.md",
-					},
-				}},
-			},
-		}, nil
-	}
+	services := newTestServices(t, cfg, func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return staticActionModel{
+				response: model.Action{
+					Action: "tool",
+					Calls: []model.ToolCall{{
+						Tool: "fs.read_file",
+						Input: map[string]any{
+							"path": "README.md",
+						},
+					}},
+				},
+			}, nil
+		}
+	})
 
 	_, err := services.StartRun(RunRequest{
 		Instruction: "查一下武汉天气",
@@ -748,7 +762,11 @@ func TestStartRunForcesFinalAfterRepeatedWebRetrieval(t *testing.T) {
 	seedWeatherSkill(t, workspace)
 
 	cfg := config.Load(workspace)
-	deps := NewDependencies(cfg)
+	paths := store.NewPaths(cfg.Runtime.Root)
+	runtimeServices := newRuntimeServices(paths)
+	modelServices := newModelServices(cfg)
+	agentServices := newAgentServices(cfg, paths)
+	toolServices := newToolServices(cfg.Workspace)
 	registry := toolruntime.NewRegistry()
 	registry.Register(staticTool{name: "web.search", access: toolruntime.AccessReadOnly, content: map[string]any{
 		"results": []map[string]any{{"title": "Weather", "url": "https://example.com/weather"}},
@@ -758,11 +776,10 @@ func TestStartRunForcesFinalAfterRepeatedWebRetrieval(t *testing.T) {
 		"content":          "Today is cloudy and 22C.",
 		"__echo_input_url": true,
 	}})
-	deps.ToolRegistry = registry
-	deps.ToolExecutor = toolruntime.NewExecutor(registry)
-	deps.DelegationManager = NewDependencies(cfg).DelegationManager
-	services := NewServicesFromDependencies(deps)
-	services.ModelFactory = func() (model.Model, error) {
+	toolServices.ToolRegistry = registry
+	toolServices.ToolExecutor = toolruntime.NewExecutor(registry)
+	delegationServices := newDelegationServices(cfg, paths, toolServices)
+	modelServices.ModelFactory = func() (model.Model, error) {
 		return &actionSequenceModel{
 			responses: []model.Action{
 				{Action: "tool", Calls: []model.ToolCall{{Tool: "web.search", Input: map[string]any{"query": "武汉天气"}}}},
@@ -774,6 +791,7 @@ func TestStartRunForcesFinalAfterRepeatedWebRetrieval(t *testing.T) {
 			},
 		}, nil
 	}
+	services := NewServicesFromParts(cfg, runtimeServices, modelServices, agentServices, toolServices, delegationServices)
 
 	response, err := services.StartRun(RunRequest{
 		Instruction: "武汉天气怎么样",
@@ -811,7 +829,11 @@ func TestStartRunFailsWhenForcedFinalStillRequestsTools(t *testing.T) {
 	seedWeatherSkill(t, workspace)
 
 	cfg := config.Load(workspace)
-	deps := NewDependencies(cfg)
+	paths := store.NewPaths(cfg.Runtime.Root)
+	runtimeServices := newRuntimeServices(paths)
+	modelServices := newModelServices(cfg)
+	agentServices := newAgentServices(cfg, paths)
+	toolServices := newToolServices(cfg.Workspace)
 	registry := toolruntime.NewRegistry()
 	registry.Register(staticTool{name: "web.search", access: toolruntime.AccessReadOnly, content: map[string]any{
 		"query":   "武汉天气",
@@ -822,11 +844,10 @@ func TestStartRunFailsWhenForcedFinalStillRequestsTools(t *testing.T) {
 		"content":          "Today is cloudy and 22C.",
 		"__echo_input_url": true,
 	}})
-	deps.ToolRegistry = registry
-	deps.ToolExecutor = toolruntime.NewExecutor(registry)
-	deps.DelegationManager = NewDependencies(cfg).DelegationManager
-	services := NewServicesFromDependencies(deps)
-	services.ModelFactory = func() (model.Model, error) {
+	toolServices.ToolRegistry = registry
+	toolServices.ToolExecutor = toolruntime.NewExecutor(registry)
+	delegationServices := newDelegationServices(cfg, paths, toolServices)
+	modelServices.ModelFactory = func() (model.Model, error) {
 		return &actionSequenceModel{
 			responses: []model.Action{
 				{Action: "tool", Calls: []model.ToolCall{{Tool: "web.search", Input: map[string]any{"query": "武汉天气"}}}},
@@ -838,6 +859,7 @@ func TestStartRunFailsWhenForcedFinalStillRequestsTools(t *testing.T) {
 			},
 		}, nil
 	}
+	services := NewServicesFromParts(cfg, runtimeServices, modelServices, agentServices, toolServices, delegationServices)
 
 	_, err := services.StartRun(RunRequest{
 		Instruction: "武汉天气怎么样",
@@ -859,10 +881,11 @@ func TestStartRunExecutesBatchedToolCallsInOrder(t *testing.T) {
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
 
-	services := NewServices(config.Load(workspace))
-	services.ModelFactory = func() (model.Model, error) {
-		return &batchWriteReadModel{}, nil
-	}
+	services := newTestServices(t, config.Load(workspace), func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return &batchWriteReadModel{}, nil
+		}
+	})
 
 	response, err := services.StartRun(RunRequest{
 		Instruction: "先写文件再读取确认内容",
@@ -876,6 +899,51 @@ func TestStartRunExecutesBatchedToolCallsInOrder(t *testing.T) {
 	}
 	if response.Result == nil || !strings.Contains(response.Result.Output, "verified") {
 		t.Fatalf("expected final verification result, got %#v", response.Result)
+	}
+}
+
+func TestStartRunExecutesReadOnlyToolBatchInParallel(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+
+	registry := toolruntime.NewRegistry()
+	stats := &parallelToolStats{}
+	toolA := &delayedStaticTool{name: "web.search", access: toolruntime.AccessReadOnly, delay: 120 * time.Millisecond, content: map[string]any{"query": "武汉天气"}, stats: stats}
+	toolB := &delayedStaticTool{name: "web.fetch", access: toolruntime.AccessReadOnly, delay: 120 * time.Millisecond, content: map[string]any{"title": "武汉天气", "content": "多云"}, stats: stats}
+	registry.Register(toolA)
+	registry.Register(toolB)
+	services := newTestServices(t, config.Load(workspace), func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, toolServices *agent.ToolServices, delegationServices *agent.DelegationServices) {
+		toolServices.ToolRegistry = registry
+		toolServices.ToolExecutor = toolruntime.NewExecutor(registry)
+		*delegationServices = newDelegationServices(config.Load(workspace), store.NewPaths(config.Load(workspace).Runtime.Root), *toolServices)
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return &actionSequenceModel{
+				responses: []model.Action{
+					{Action: "tool", Calls: []model.ToolCall{
+						{Tool: "web.search", Input: map[string]any{"query": "武汉天气"}},
+						{Tool: "web.fetch", Input: map[string]any{"url": "https://example.com/wuhan"}},
+					}},
+					{Action: "final", Answer: "done"},
+				},
+			}, nil
+		}
+	})
+
+	response, err := services.StartRun(RunRequest{
+		Instruction: "查一下武汉天气",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    4,
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if response.Run.Status != harnessruntime.RunCompleted {
+		t.Fatalf("expected completed run, got %#v", response.Run)
+	}
+	if peak := stats.peak.Load(); peak < 2 {
+		t.Fatalf("expected batched tools to overlap, peak concurrency was %d", peak)
 	}
 }
 
@@ -1332,6 +1400,19 @@ type staticTool struct {
 	content map[string]any
 }
 
+type delayedStaticTool struct {
+	name    string
+	access  toolruntime.AccessMode
+	delay   time.Duration
+	content map[string]any
+	stats   *parallelToolStats
+}
+
+type parallelToolStats struct {
+	current atomic.Int32
+	peak    atomic.Int32
+}
+
 func (t staticTool) Name() string                       { return t.name }
 func (t staticTool) Description() string                { return "static test tool" }
 func (t staticTool) AccessMode() toolruntime.AccessMode { return t.access }
@@ -1349,6 +1430,31 @@ func (t staticTool) Execute(ctx context.Context, input json.RawMessage) (toolrun
 				content["final_url"] = url
 			}
 		}
+	}
+	return toolruntime.Result{Content: content}, nil
+}
+
+func (t *delayedStaticTool) Name() string                       { return t.name }
+func (t *delayedStaticTool) Description() string                { return "delayed static test tool" }
+func (t *delayedStaticTool) AccessMode() toolruntime.AccessMode { return t.access }
+func (t *delayedStaticTool) Execute(ctx context.Context, input json.RawMessage) (toolruntime.Result, error) {
+	_ = input
+	current := t.stats.current.Add(1)
+	for {
+		peak := t.stats.peak.Load()
+		if current <= peak || t.stats.peak.CompareAndSwap(peak, current) {
+			break
+		}
+	}
+	defer t.stats.current.Add(-1)
+	select {
+	case <-ctx.Done():
+		return toolruntime.Result{}, ctx.Err()
+	case <-time.After(t.delay):
+	}
+	content := make(map[string]any, len(t.content))
+	for key, value := range t.content {
+		content[key] = value
 	}
 	return toolruntime.Result{Content: content}, nil
 }
@@ -1383,7 +1489,7 @@ func (m *batchWriteReadModel) Generate(ctx context.Context, req model.Request) (
 	case 0:
 		m.index++
 		return model.Response{
-			Text: `{"action":"tool","calls":[{"tool":"fs.write_file","input":{"path":"notes.txt","content":"hello from batch tools"}},{"tool":"fs.read_file","input":{"path":"notes.txt"}}]}`,
+			Text:         `{"action":"tool","calls":[{"tool":"fs.write_file","input":{"path":"notes.txt","content":"hello from batch tools"}},{"tool":"fs.read_file","input":{"path":"notes.txt"}}]}`,
 			FinishReason: "stop",
 		}, nil
 	case 1:

@@ -11,6 +11,7 @@ import (
 	"github.com/huanglei214/agent-demo/internal/planner"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
 	"github.com/huanglei214/agent-demo/internal/skill"
+	"github.com/huanglei214/agent-demo/internal/store"
 )
 
 type RunRequest struct {
@@ -32,6 +33,14 @@ func (s Services) StartRun(req RunRequest) (RunResponse, error) {
 
 func (s Services) StartRunStream(req RunRequest, observer RunObserver) (RunResponse, error) {
 	return s.startRun(req, observer)
+}
+
+func (s Services) ExecuteRun(task harnessruntime.Task, session harnessruntime.Session, run harnessruntime.Run, plan harnessruntime.Plan, state harnessruntime.RunState, activate bool, observer RunObserver) (RunResponse, error) {
+	runner, err := s.runner()
+	if err != nil {
+		return RunResponse{}, err
+	}
+	return runner.ExecuteRun(task, session, run, plan, state, activate, observer)
 }
 
 func (s Services) startRun(req RunRequest, observer RunObserver) (RunResponse, error) {
@@ -131,21 +140,20 @@ func (s Services) startRun(req RunRequest, observer RunObserver) (RunResponse, e
 	if err != nil {
 		return RunResponse{}, err
 	}
+	sequence := harnessruntime.NewSequenceCursor(nextSequence)
 
 	events := []harnessruntime.Event{
-		newEvent(run, task.ID, session.ID, nextSequence, "task.created", "system", map[string]any{"task_id": task.ID}),
+		newEvent(run, task.ID, session.ID, sequence.Next(), "task.created", "system", map[string]any{"task_id": task.ID}),
 	}
-	sequence := nextSequence + 1
 	if createdSession {
-		events = append(events, newEvent(run, task.ID, session.ID, sequence, "session.created", "system", map[string]any{"session_id": session.ID}))
-		sequence++
+		events = append(events, newEvent(run, task.ID, session.ID, sequence.Next(), "session.created", "system", map[string]any{"session_id": session.ID}))
 	}
 	events = append(events,
-		newEvent(run, task.ID, session.ID, sequence, "run.created", "system", map[string]any{"status": run.Status}),
-		newEvent(run, task.ID, session.ID, sequence+1, "run.role_assigned", "runtime", map[string]any{"role": run.Role}),
-		newEvent(run, task.ID, session.ID, sequence+2, "plan.created", "planner", map[string]any{"plan_id": plan.ID, "version": plan.Version}),
+		newEvent(run, task.ID, session.ID, sequence.Next(), "run.created", "system", map[string]any{"status": run.Status}),
+		newEvent(run, task.ID, session.ID, sequence.Next(), "run.role_assigned", "runtime", map[string]any{"role": run.Role}),
+		newEvent(run, task.ID, session.ID, sequence.Next(), "plan.created", "planner", map[string]any{"plan_id": plan.ID, "version": plan.Version}),
 	)
-	if err := appendEvents(s.Executor, events, observer); err != nil {
+	if err := appendEvents(s.EventStore, events, observer); err != nil {
 		return RunResponse{}, err
 	}
 
@@ -160,14 +168,14 @@ func (s Services) startRun(req RunRequest, observer RunObserver) (RunResponse, e
 	if err := s.StateStore.AppendSessionMessage(userMessage); err != nil {
 		return RunResponse{}, err
 	}
-	if err := appendEvent(s.Executor, newEvent(run, task.ID, session.ID, sequence+3, "user.message", "user", map[string]any{
+	if err := appendEvent(s.EventStore, newEvent(run, task.ID, session.ID, sequence.Next(), "user.message", "user", map[string]any{
 		"message_id": userMessage.ID,
 		"content":    userMessage.Content,
 	}), observer); err != nil {
 		return RunResponse{}, err
 	}
 	if activeSkill != nil {
-		if err := appendEvent(s.Executor, newEvent(run, task.ID, session.ID, sequence+4, "skill.activated", "runtime", map[string]any{
+		if err := appendEvent(s.EventStore, newEvent(run, task.ID, session.ID, sequence.Next(), "skill.activated", "runtime", map[string]any{
 			"name":          activeSkill.Name,
 			"scope":         activeSkill.Scope,
 			"allowed_tools": activeSkill.AllowedTools,
@@ -176,7 +184,11 @@ func (s Services) startRun(req RunRequest, observer RunObserver) (RunResponse, e
 		}
 	}
 
-	return s.ExecuteRun(task, session, run, plan, state, true, observer)
+	runner, err := s.runner()
+	if err != nil {
+		return RunResponse{}, err
+	}
+	return runner.ExecuteRun(task, session, run, plan, state, true, observer)
 }
 
 func (s Services) resolveActiveSkill(req RunRequest) (*skill.Definition, error) {
@@ -230,8 +242,8 @@ func newEvent(run harnessruntime.Run, taskID, sessionID string, sequence int64, 
 	}
 }
 
-func appendEvent(executor agent.Executor, event harnessruntime.Event, observer RunObserver) error {
-	if err := executor.EventStore.Append(event); err != nil {
+func appendEvent(eventStore store.EventStore, event harnessruntime.Event, observer RunObserver) error {
+	if err := eventStore.Append(event); err != nil {
 		return err
 	}
 	if observer != nil {
@@ -240,9 +252,9 @@ func appendEvent(executor agent.Executor, event harnessruntime.Event, observer R
 	return nil
 }
 
-func appendEvents(executor agent.Executor, events []harnessruntime.Event, observer RunObserver) error {
+func appendEvents(eventStore store.EventStore, events []harnessruntime.Event, observer RunObserver) error {
 	for _, event := range events {
-		if err := appendEvent(executor, event, observer); err != nil {
+		if err := appendEvent(eventStore, event, observer); err != nil {
 			return err
 		}
 	}

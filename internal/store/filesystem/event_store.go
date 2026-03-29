@@ -10,6 +10,8 @@ import (
 	"github.com/huanglei214/agent-demo/internal/store"
 )
 
+const maxJSONLScanTokenSize = 1024 * 1024
+
 type EventStore struct {
 	paths store.Paths
 }
@@ -51,7 +53,7 @@ func (s EventStore) ReadAll(runID string) ([]harnessruntime.Event, error) {
 	defer file.Close()
 
 	events := make([]harnessruntime.Event, 0)
-	scanner := bufio.NewScanner(file)
+	scanner := newJSONLScanner(file)
 	for scanner.Scan() {
 		var event harnessruntime.Event
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
@@ -75,7 +77,7 @@ func (s EventStore) NextSequence(runID string) (int64, error) {
 	defer file.Close()
 
 	var count int64
-	scanner := bufio.NewScanner(file)
+	scanner := newJSONLScanner(file)
 	for scanner.Scan() {
 		count++
 	}
@@ -83,4 +85,10 @@ func (s EventStore) NextSequence(runID string) (int64, error) {
 		return 0, err
 	}
 	return count + 1, nil
+}
+
+func newJSONLScanner(file *os.File) *bufio.Scanner {
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxJSONLScanTokenSize)
+	return scanner
 }

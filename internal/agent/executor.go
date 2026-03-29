@@ -13,40 +13,43 @@ import (
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
 	"github.com/huanglei214/agent-demo/internal/skill"
 	"github.com/huanglei214/agent-demo/internal/store"
-	"github.com/huanglei214/agent-demo/internal/store/filesystem"
 	toolruntime "github.com/huanglei214/agent-demo/internal/tool"
 )
 
-type Dependencies struct {
-	Config            config.Config
-	Paths             store.Paths
-	EventStore        filesystem.EventStore
-	StateStore        filesystem.StateStore
-	ModelFactory      model.Factory
-	Planner           planner.Planner
-	ContextManager    harnesscontext.Service
-	MemoryManager     memory.Service
+type RuntimeServices struct {
+	Paths      store.Paths
+	EventStore store.EventStore
+	StateStore store.StateStore
+}
+
+type ModelServices struct {
+	ModelFactory  model.Factory
+	PromptBuilder prompt.Service
+}
+
+type AgentServices struct {
+	Planner        planner.Planner
+	ContextManager harnesscontext.Service
+	MemoryManager  memory.Service
+}
+
+type ToolServices struct {
+	ToolRegistry *toolruntime.Registry
+	ToolExecutor toolruntime.Executor
+}
+
+type DelegationServices struct {
 	DelegationManager delegation.Manager
-	PromptBuilder     prompt.Service
 	SkillRegistry     skill.Registry
-	ToolRegistry      *toolruntime.Registry
-	ToolExecutor      toolruntime.Executor
 }
 
 type Executor struct {
-	Config            config.Config
-	Paths             store.Paths
-	EventStore        filesystem.EventStore
-	StateStore        filesystem.StateStore
-	ModelFactory      model.Factory
-	Planner           planner.Planner
-	ContextManager    harnesscontext.Service
-	MemoryManager     memory.Service
-	DelegationManager delegation.Manager
-	PromptBuilder     prompt.Service
-	SkillRegistry     skill.Registry
-	ToolRegistry      *toolruntime.Registry
-	ToolExecutor      toolruntime.Executor
+	Config config.Config
+	RuntimeServices
+	ModelServices
+	AgentServices
+	ToolServices
+	DelegationServices
 }
 
 type ExecutionResponse struct {
@@ -55,21 +58,21 @@ type ExecutionResponse struct {
 	Result *harnessruntime.RunResult `json:"result,omitempty"`
 }
 
-func NewExecutor(deps Dependencies) Executor {
+func NewExecutor(
+	cfg config.Config,
+	runtime RuntimeServices,
+	modelServices ModelServices,
+	agentServices AgentServices,
+	toolServices ToolServices,
+	delegationServices DelegationServices,
+) Executor {
 	return Executor{
-		Config:            deps.Config,
-		Paths:             deps.Paths,
-		EventStore:        deps.EventStore,
-		StateStore:        deps.StateStore,
-		ModelFactory:      deps.ModelFactory,
-		Planner:           deps.Planner,
-		ContextManager:    deps.ContextManager,
-		MemoryManager:     deps.MemoryManager,
-		DelegationManager: deps.DelegationManager,
-		PromptBuilder:     deps.PromptBuilder,
-		SkillRegistry:     deps.SkillRegistry,
-		ToolRegistry:      deps.ToolRegistry,
-		ToolExecutor:      deps.ToolExecutor,
+		Config:             cfg,
+		RuntimeServices:    runtime,
+		ModelServices:      modelServices,
+		AgentServices:      agentServices,
+		ToolServices:       toolServices,
+		DelegationServices: delegationServices,
 	}
 }
 

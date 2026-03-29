@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	harnesscontext "github.com/huanglei214/agent-demo/internal/context"
@@ -19,7 +20,8 @@ import (
 func (e Executor) resumePostToolAction(runCtx context.Context, exec *runExecution) (model.Action, error) {
 	pendingToolResults := pendingToolResultsFromState(exec.state)
 	followUpPrompt := e.PromptBuilder.BuildFollowUpPrompt(exec.run.Role, exec.task, pendingToolResults, exec.workingEvidence, e.promptToolMetadataForSkill(exec.activeSkill), exec.activeSkill)
-	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1, "model.called", "runtime", map[string]any{
+	modelSequence := exec.nextSequence()
+	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, modelSequence, "model.called", "runtime", map[string]any{
 		"provider": exec.run.Provider,
 		"model":    exec.run.Model,
 		"role":     exec.run.Role,
@@ -35,14 +37,14 @@ func (e Executor) resumePostToolAction(runCtx context.Context, exec *runExecutio
 		Metadata:     followUpPrompt.Metadata,
 	}
 	followUpResponse, err := e.generateWithModelTimeout(runCtx, exec.provider, followUpRequest)
-	if appendErr := e.appendModelCall(exec.run, exec.sequence+1, "post_tool_resume", exec.state.PendingToolName, followUpRequest, responsePtr(followUpResponse, err), err); appendErr != nil {
+	if appendErr := e.appendModelCall(exec.run, modelSequence, "post_tool_resume", exec.state.PendingToolName, followUpRequest, responsePtr(followUpResponse, err), err); appendErr != nil {
 		return model.Action{}, appendErr
 	}
 	if err != nil {
-		return model.Action{}, e.failOnly(exec, err, exec.sequence+2)
+		return model.Action{}, e.failOnly(exec, err, exec.nextSequence())
 	}
 
-	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+2, "model.responded", "model", map[string]any{
+	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.nextSequence(), "model.responded", "model", map[string]any{
 		"finish_reason": followUpResponse.FinishReason,
 		"phase":         "post_tool_resume",
 	}), exec.observer); err != nil {
@@ -51,10 +53,10 @@ func (e Executor) resumePostToolAction(runCtx context.Context, exec *runExecutio
 
 	followUpAction := parseAction(followUpResponse.Text)
 	if followUpAction.Action == "" {
-		return model.Action{}, e.failOnly(exec, errors.New("resumed post-tool model response did not produce a valid action"), exec.sequence+3)
+		return model.Action{}, e.failOnly(exec, errors.New("resumed post-tool model response did not produce a valid action"), exec.nextSequence())
 	}
 	if err := validateActionForRole(exec.run.Role, followUpAction); err != nil {
-		return model.Action{}, e.failOnly(exec, err, exec.sequence+3)
+		return model.Action{}, e.failOnly(exec, err, exec.nextSequence())
 	}
 
 	exec.finalAnswer = followUpAction.Answer
@@ -66,7 +68,6 @@ func (e Executor) resumePostToolAction(runCtx context.Context, exec *runExecutio
 	if err := e.StateStore.SaveState(exec.state); err != nil {
 		return model.Action{}, err
 	}
-	exec.sequence += 2
 	return followUpAction, nil
 }
 
@@ -74,10 +75,10 @@ func (e Executor) dispatchToolActions(runCtx context.Context, exec *runExecution
 	for action.Action == "tool" {
 		calls, err := toolCallsFromAction(action)
 		if err != nil {
-			return model.Action{}, e.failOnly(exec, err, exec.sequence+1)
+			return model.Action{}, e.failOnly(exec, err, exec.nextSequence())
 		}
 		if len(exec.explicitMemoryCandidates) > 0 && containsTool(calls, "fs.write_file") {
-			if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1, "memory.routed", "memory", map[string]any{
+			if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.nextSequence(), "memory.routed", "memory", map[string]any{
 				"count":      len(exec.explicitMemoryCandidates),
 				"source":     "tool_intercept",
 				"tool_batch": extractToolNames(calls),
@@ -85,7 +86,6 @@ func (e Executor) dispatchToolActions(runCtx context.Context, exec *runExecution
 				return model.Action{}, err
 			}
 			exec.finalAnswer = exec.explicitMemoryAnswer
-			exec.sequence++
 			return model.Action{Action: "final", Answer: exec.finalAnswer}, nil
 		}
 
@@ -142,16 +142,17 @@ func (e Executor) dispatchToolActions(runCtx context.Context, exec *runExecution
 func (e Executor) validateToolCalls(exec *runExecution, calls []model.ToolCall) error {
 	for _, call := range calls {
 		if err := ensureSkillAllowsTool(exec.activeSkill, call.Tool); err != nil {
-			return e.failOnly(exec, err, exec.sequence+1)
+			return e.failOnly(exec, err, exec.nextSequence())
 		}
 		if err := e.DelegationManager.ValidateTools(exec.run, call.Tool); err != nil {
-			if appendErr := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1, "subagent.rejected", "delegation", map[string]any{
+			rejectedSequence := exec.nextSequence()
+			if appendErr := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, rejectedSequence, "subagent.rejected", "delegation", map[string]any{
 				"tool":   call.Tool,
 				"reason": err.Error(),
 			}), exec.observer); appendErr != nil {
 				return appendErr
 			}
-			return e.failOnly(exec, err, exec.sequence+2)
+			return e.failOnly(exec, err, exec.nextSequence())
 		}
 	}
 	return nil
@@ -163,18 +164,18 @@ func (e Executor) runToolBatch(runCtx context.Context, exec *runExecution, calls
 		toolCallIDs[i] = harnessruntime.NewID("toolcall")
 	}
 	if len(calls) > 1 {
-		if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1, "tool.batch.started", "runtime", map[string]any{
+		if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.nextSequence(), "tool.batch.started", "runtime", map[string]any{
 			"count": len(calls),
 			"tools": extractToolNames(calls),
 		}), exec.observer); err != nil {
 			return nil, err
 		}
-		exec.sequence++
 	}
 
+	start := exec.reserveSequences(len(calls))
 	calledEvents := make([]harnessruntime.Event, 0, len(calls))
 	for i, call := range calls {
-		calledEvents = append(calledEvents, e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1+int64(i), "tool.called", "runtime", map[string]any{
+		calledEvents = append(calledEvents, e.newEvent(exec.run, exec.task.ID, exec.session.ID, start+int64(i), "tool.called", "runtime", map[string]any{
 			"tool_call_id": toolCallIDs[i],
 			"tool":         call.Tool,
 			"input":        call.Input,
@@ -183,14 +184,14 @@ func (e Executor) runToolBatch(runCtx context.Context, exec *runExecution, calls
 	if err := e.appendEvents(calledEvents, exec.observer); err != nil {
 		return nil, err
 	}
-	exec.sequence += int64(len(calls))
 
 	toolResults, failures := e.executeToolCalls(runCtx, toolCallIDs, calls)
+	start = exec.reserveSequences(len(calls))
 	resultEvents := make([]harnessruntime.Event, 0, len(calls))
 	var firstErr error
 	for i, call := range calls {
 		if i < len(toolResults) && toolResults[i].Tool != "" {
-			resultEvents = append(resultEvents, e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1+int64(len(resultEvents)), "tool.succeeded", "tool", map[string]any{
+			resultEvents = append(resultEvents, e.newEvent(exec.run, exec.task.ID, exec.session.ID, start+int64(len(resultEvents)), "tool.succeeded", "tool", map[string]any{
 				"tool_call_id": toolResults[i].ToolCallID,
 				"tool":         toolResults[i].Tool,
 				"input":        toolResults[i].Input,
@@ -210,7 +211,7 @@ func (e Executor) runToolBatch(runCtx context.Context, exec *runExecution, calls
 		if detailedErr, ok := failure.Err.(toolruntime.DetailedError); ok {
 			details = detailedErr.Details()
 		}
-		resultEvents = append(resultEvents, e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1+int64(len(resultEvents)), "tool.failed", "tool", map[string]any{
+		resultEvents = append(resultEvents, e.newEvent(exec.run, exec.task.ID, exec.session.ID, start+int64(len(resultEvents)), "tool.failed", "tool", map[string]any{
 			"tool_call_id": toolCallIDs[i],
 			"tool":         call.Tool,
 			"input":        call.Input,
@@ -224,9 +225,8 @@ func (e Executor) runToolBatch(runCtx context.Context, exec *runExecution, calls
 	if err := e.appendEvents(resultEvents, exec.observer); err != nil {
 		return nil, err
 	}
-	exec.sequence += int64(len(resultEvents))
 	if firstErr != nil {
-		return nil, e.failOnly(exec, firstErr, exec.sequence+1)
+		return nil, e.failOnly(exec, firstErr, exec.nextSequence())
 	}
 
 	for _, toolResult := range toolResults {
@@ -237,10 +237,9 @@ func (e Executor) runToolBatch(runCtx context.Context, exec *runExecution, calls
 		if mode, ok := toolResult.Result["write_mode"].(string); ok && mode == "updated" {
 			eventType = "fs.file_updated"
 		}
-		if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1, eventType, "tool", toolResult.Result), exec.observer); err != nil {
+		if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.nextSequence(), eventType, "tool", toolResult.Result), exec.observer); err != nil {
 			return nil, err
 		}
-		exec.sequence++
 	}
 
 	return toolResults, nil
@@ -271,20 +270,20 @@ func (e Executor) maybeCompactContext(exec *runExecution, recentEvents []harness
 	if err := e.StateStore.SaveSummaries(exec.run.ID, exec.summaries); err != nil {
 		return err
 	}
-	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1, "context.compacted", "context", map[string]any{
+	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.nextSequence(), "context.compacted", "context", map[string]any{
 		"summary_id": summary.ID,
 		"scope":      summary.Scope,
 		"reason":     reason,
 	}), exec.observer); err != nil {
 		return err
 	}
-	exec.sequence++
 	return nil
 }
 
 func (e Executor) followUpAfterTools(runCtx context.Context, exec *runExecution, calls []model.ToolCall, toolResults []harnessruntime.ToolCallResult) (model.Action, error) {
 	followUpPrompt := e.PromptBuilder.BuildFollowUpPrompt(exec.run.Role, exec.task, toolResults, exec.workingEvidence, e.promptToolMetadataForSkill(exec.activeSkill), exec.activeSkill)
-	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1, "model.called", "runtime", map[string]any{
+	modelSequence := exec.nextSequence()
+	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, modelSequence, "model.called", "runtime", map[string]any{
 		"provider": exec.run.Provider,
 		"model":    exec.run.Model,
 		"role":     exec.run.Role,
@@ -300,13 +299,13 @@ func (e Executor) followUpAfterTools(runCtx context.Context, exec *runExecution,
 		Metadata:     followUpPrompt.Metadata,
 	}
 	followUpResponse, err := e.generateWithModelTimeout(runCtx, exec.provider, followUpRequest)
-	if appendErr := e.appendModelCall(exec.run, exec.sequence+1, "post_tool", strings.Join(extractToolNames(calls), ","), followUpRequest, responsePtr(followUpResponse, err), err); appendErr != nil {
+	if appendErr := e.appendModelCall(exec.run, modelSequence, "post_tool", strings.Join(extractToolNames(calls), ","), followUpRequest, responsePtr(followUpResponse, err), err); appendErr != nil {
 		return model.Action{}, appendErr
 	}
 	if err != nil {
-		return model.Action{}, e.failOnly(exec, err, exec.sequence+2)
+		return model.Action{}, e.failOnly(exec, err, exec.nextSequence())
 	}
-	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+2, "model.responded", "model", map[string]any{
+	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.nextSequence(), "model.responded", "model", map[string]any{
 		"finish_reason": followUpResponse.FinishReason,
 		"phase":         "post_tool",
 	}), exec.observer); err != nil {
@@ -315,10 +314,10 @@ func (e Executor) followUpAfterTools(runCtx context.Context, exec *runExecution,
 
 	followUpAction := parseAction(followUpResponse.Text)
 	if followUpAction.Action == "" {
-		return model.Action{}, e.failOnly(exec, errors.New("post-tool model response did not produce a valid action"), exec.sequence+3)
+		return model.Action{}, e.failOnly(exec, errors.New("post-tool model response did not produce a valid action"), exec.nextSequence())
 	}
 	if err := validateActionForRole(exec.run.Role, followUpAction); err != nil {
-		return model.Action{}, e.failOnly(exec, err, exec.sequence+3)
+		return model.Action{}, e.failOnly(exec, err, exec.nextSequence())
 	}
 	if decision := retrieval.DecideProgress(exec.retrievalProgress, followUpAction); decision.ShouldForceFinal {
 		forcedAction, err := e.forceFinalFromRetrieval(runCtx, exec, calls, decision.Reason)
@@ -326,9 +325,6 @@ func (e Executor) followUpAfterTools(runCtx context.Context, exec *runExecution,
 			return model.Action{}, err
 		}
 		followUpAction = forcedAction
-		exec.sequence += 4
-	} else {
-		exec.sequence += 2
 	}
 
 	return followUpAction, nil
@@ -343,7 +339,8 @@ func (e Executor) forceFinalFromRetrieval(runCtx context.Context, exec *runExecu
 		e.promptToolMetadataForSkill(exec.activeSkill),
 		exec.activeSkill,
 	)
-	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+3, "model.called", "runtime", map[string]any{
+	modelSequence := exec.nextSequence()
+	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, modelSequence, "model.called", "runtime", map[string]any{
 		"provider": exec.run.Provider,
 		"model":    exec.run.Model,
 		"role":     exec.run.Role,
@@ -359,13 +356,13 @@ func (e Executor) forceFinalFromRetrieval(runCtx context.Context, exec *runExecu
 		Metadata:     forcedPrompt.Metadata,
 	}
 	forcedResponse, err := e.generateWithModelTimeout(runCtx, exec.provider, forcedRequest)
-	if appendErr := e.appendModelCall(exec.run, exec.sequence+3, "forced_final", strings.Join(extractToolNames(calls), ","), forcedRequest, responsePtr(forcedResponse, err), err); appendErr != nil {
+	if appendErr := e.appendModelCall(exec.run, modelSequence, "forced_final", strings.Join(extractToolNames(calls), ","), forcedRequest, responsePtr(forcedResponse, err), err); appendErr != nil {
 		return model.Action{}, appendErr
 	}
 	if err != nil {
-		return model.Action{}, e.failOnly(exec, err, exec.sequence+4)
+		return model.Action{}, e.failOnly(exec, err, exec.nextSequence())
 	}
-	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+4, "model.responded", "model", map[string]any{
+	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.nextSequence(), "model.responded", "model", map[string]any{
 		"finish_reason": forcedResponse.FinishReason,
 		"phase":         "forced_final",
 	}), exec.observer); err != nil {
@@ -374,13 +371,13 @@ func (e Executor) forceFinalFromRetrieval(runCtx context.Context, exec *runExecu
 
 	forcedAction := parseAction(forcedResponse.Text)
 	if forcedAction.Action == "" {
-		return model.Action{}, e.failOnly(exec, errors.New("forced-final model response did not produce a valid action"), exec.sequence+5)
+		return model.Action{}, e.failOnly(exec, errors.New("forced-final model response did not produce a valid action"), exec.nextSequence())
 	}
 	if err := validateActionForRole(exec.run.Role, forcedAction); err != nil {
-		return model.Action{}, e.failOnly(exec, err, exec.sequence+5)
+		return model.Action{}, e.failOnly(exec, err, exec.nextSequence())
 	}
 	if forcedAction.Action != "final" || strings.TrimSpace(forcedAction.Answer) == "" {
-		return model.Action{}, e.failOnly(exec, errors.New("forced-final model response did not produce a final answer"), exec.sequence+5)
+		return model.Action{}, e.failOnly(exec, errors.New("forced-final model response did not produce a final answer"), exec.nextSequence())
 	}
 	return forcedAction, nil
 }
@@ -511,6 +508,13 @@ type toolExecutionError struct {
 }
 
 func (e Executor) executeToolCalls(ctx context.Context, toolCallIDs []string, calls []model.ToolCall) ([]harnessruntime.ToolCallResult, []toolExecutionError) {
+	if e.canExecuteToolBatchInParallel(calls) {
+		return e.executeToolCallsParallel(ctx, toolCallIDs, calls)
+	}
+	return e.executeToolCallsSerial(ctx, toolCallIDs, calls)
+}
+
+func (e Executor) executeToolCallsSerial(ctx context.Context, toolCallIDs []string, calls []model.ToolCall) ([]harnessruntime.ToolCallResult, []toolExecutionError) {
 	results := make([]harnessruntime.ToolCallResult, len(calls))
 	failures := make([]toolExecutionError, 0)
 	for i, call := range calls {
@@ -527,6 +531,53 @@ func (e Executor) executeToolCalls(ctx context.Context, toolCallIDs []string, ca
 		}
 	}
 	return results, failures
+}
+
+func (e Executor) executeToolCallsParallel(ctx context.Context, toolCallIDs []string, calls []model.ToolCall) ([]harnessruntime.ToolCallResult, []toolExecutionError) {
+	results := make([]harnessruntime.ToolCallResult, len(calls))
+	failures := make([]toolExecutionError, len(calls))
+	var wg sync.WaitGroup
+	for i, call := range calls {
+		wg.Add(1)
+		go func(i int, call model.ToolCall) {
+			defer wg.Done()
+			result, err := e.ToolExecutor.Execute(ctx, call.Tool, call.Input)
+			if err != nil {
+				failures[i] = toolExecutionError{Index: i, Call: call, Err: err}
+				return
+			}
+			results[i] = harnessruntime.ToolCallResult{
+				ToolCallID: toolCallIDs[i],
+				Tool:       call.Tool,
+				Input:      call.Input,
+				Result:     result.Content,
+			}
+		}(i, call)
+	}
+	wg.Wait()
+	filtered := make([]toolExecutionError, 0)
+	for _, failure := range failures {
+		if failure.Err != nil {
+			filtered = append(filtered, failure)
+		}
+	}
+	return results, filtered
+}
+
+func (e Executor) canExecuteToolBatchInParallel(calls []model.ToolCall) bool {
+	if len(calls) < 2 {
+		return false
+	}
+	for _, call := range calls {
+		toolDef, ok := e.ToolRegistry.Get(call.Tool)
+		if !ok {
+			return false
+		}
+		if toolDef.AccessMode() != toolruntime.AccessReadOnly {
+			return false
+		}
+	}
+	return true
 }
 
 func validateActionForRole(role harnessruntime.RunRole, action model.Action) error {

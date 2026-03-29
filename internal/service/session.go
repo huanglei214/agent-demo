@@ -1,7 +1,9 @@
 package service
 
 import (
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -64,6 +66,48 @@ func (s Services) InspectSession(sessionID string, recentLimit int) (SessionInsp
 }
 
 func (s Services) listSessionRuns(sessionID string) ([]SessionRunSummary, error) {
+	entries, err := os.ReadDir(s.Paths.SessionRunsDir(sessionID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return s.listSessionRunsFromRunsDir(sessionID)
+		}
+		return nil, err
+	}
+
+	runs := make([]SessionRunSummary, 0)
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		runID := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+		run, err := s.StateStore.LoadRun(runID)
+		if err != nil {
+			var indexed harnessruntime.Run
+			if err := readSessionRunIndex(s.Paths.SessionRunPath(sessionID, runID), &indexed); err != nil {
+				return nil, err
+			}
+			run = indexed
+		}
+		if run.SessionID != sessionID {
+			continue
+		}
+		runs = append(runs, SessionRunSummary{
+			RunID:         run.ID,
+			Status:        run.Status,
+			CurrentStepID: run.CurrentStepID,
+			ParentRunID:   run.ParentRunID,
+			CreatedAt:     run.CreatedAt,
+			UpdatedAt:     run.UpdatedAt,
+		})
+	}
+
+	sort.Slice(runs, func(i, j int) bool {
+		return runs[i].CreatedAt.After(runs[j].CreatedAt)
+	})
+	return runs, nil
+}
+
+func (s Services) listSessionRunsFromRunsDir(sessionID string) ([]SessionRunSummary, error) {
 	entries, err := os.ReadDir(s.Paths.RunsDir())
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -98,6 +142,14 @@ func (s Services) listSessionRuns(sessionID string) ([]SessionRunSummary, error)
 		return runs[i].CreatedAt.After(runs[j].CreatedAt)
 	})
 	return runs, nil
+}
+
+func readSessionRunIndex(path string, out *harnessruntime.Run) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
 }
 
 func ensureSessionMessages(messages []harnessruntime.SessionMessage) []harnessruntime.SessionMessage {

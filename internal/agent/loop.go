@@ -31,11 +31,23 @@ type runExecution struct {
 	explicitMemoryCandidates []harnessruntime.MemoryCandidate
 	explicitMemoryAnswer     string
 	lastPromptBytes          int
-	sequence                 int64
+	sequence                 harnessruntime.SequenceCursor
 	turnCount                int
 	finalAnswer              string
 	observer                 RunObserver
 	provider                 model.Model
+}
+
+func (e *runExecution) nextSequence() int64 {
+	return e.sequence.Next()
+}
+
+func (e *runExecution) reserveSequences(count int) int64 {
+	return e.sequence.Reserve(count)
+}
+
+func (e *runExecution) currentSequence() int64 {
+	return e.sequence.Current()
 }
 
 func (e Executor) ExecuteRun(task harnessruntime.Task, session harnessruntime.Session, run harnessruntime.Run, plan harnessruntime.Plan, state harnessruntime.RunState, activate bool, observer RunObserver) (ExecutionResponse, error) {
@@ -71,7 +83,7 @@ func (e Executor) ExecuteRun(task harnessruntime.Task, session harnessruntime.Se
 		state:       state,
 		currentStep: currentStep,
 		activeSkill: activeSkill,
-		sequence:    nextSequence - 1,
+		sequence:    harnessruntime.NewSequenceCursor(nextSequence),
 		observer:    observer,
 	}
 
@@ -86,7 +98,7 @@ func (e Executor) ExecuteRun(task harnessruntime.Task, session harnessruntime.Se
 
 	provider, err := e.ModelFactory()
 	if err != nil {
-		return e.failRun(exec.run, exec.plan, exec.task.ID, exec.session.ID, exec.state, err, exec.sequence+1, exec.observer)
+		return e.failRun(exec.run, exec.plan, exec.task.ID, exec.session.ID, exec.state, err, exec.nextSequence(), exec.observer)
 	}
 	exec.provider = provider
 
@@ -109,10 +121,10 @@ func (e Executor) ExecuteRun(task harnessruntime.Task, session harnessruntime.Se
 	}
 
 	if action.Action == "final" && strings.TrimSpace(exec.finalAnswer) == "" {
-		return e.failRun(exec.run, exec.plan, exec.task.ID, exec.session.ID, exec.state, errors.New("model returned an empty final answer"), exec.sequence+1, exec.observer)
+		return e.failRun(exec.run, exec.plan, exec.task.ID, exec.session.ID, exec.state, errors.New("model returned an empty final answer"), exec.nextSequence(), exec.observer)
 	}
 	if action.Action != "final" && action.Action != "delegate" {
-		return e.failRun(exec.run, exec.plan, exec.task.ID, exec.session.ID, exec.state, errors.New("model returned an unsupported action"), exec.sequence+1, exec.observer)
+		return e.failRun(exec.run, exec.plan, exec.task.ID, exec.session.ID, exec.state, errors.New("model returned an unsupported action"), exec.nextSequence(), exec.observer)
 	}
 
 	return e.completeRun(exec)
@@ -137,15 +149,15 @@ func (e Executor) activateRun(exec *runExecution) error {
 		return err
 	}
 
+	start := exec.reserveSequences(3)
 	lifecycleEvents := []harnessruntime.Event{
-		e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1, "run.status_changed", "runtime", map[string]any{"from": harnessruntime.RunPending, "to": harnessruntime.RunRunning}),
-		e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+2, "run.started", "runtime", map[string]any{"run_id": exec.run.ID}),
-		e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+3, "plan.step.started", "runtime", map[string]any{"step_id": exec.currentStep.ID}),
+		e.newEvent(exec.run, exec.task.ID, exec.session.ID, start, "run.status_changed", "runtime", map[string]any{"from": harnessruntime.RunPending, "to": harnessruntime.RunRunning}),
+		e.newEvent(exec.run, exec.task.ID, exec.session.ID, start+1, "run.started", "runtime", map[string]any{"run_id": exec.run.ID}),
+		e.newEvent(exec.run, exec.task.ID, exec.session.ID, start+2, "plan.step.started", "runtime", map[string]any{"step_id": exec.currentStep.ID}),
 	}
 	if err := e.appendEvents(lifecycleEvents, exec.observer); err != nil {
 		return err
 	}
-	exec.sequence += int64(len(lifecycleEvents))
 	return nil
 }
 
@@ -208,10 +220,11 @@ func (e Executor) resolveInitialAction(runCtx context.Context, exec *runExecutio
 	exec.explicitMemoryCandidates = explicitMemoryCandidates
 	exec.explicitMemoryAnswer = explicitMemoryAnswer
 
+	start := exec.reserveSequences(3)
 	preModelEvents := []harnessruntime.Event{
-		e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1, "memory.recalled", "memory", map[string]any{"count": len(exec.recalledMemories)}),
-		e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+2, "prompt.built", "prompt", runPrompt.Metadata),
-		e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+3, "context.built", "context", map[string]any{
+		e.newEvent(exec.run, exec.task.ID, exec.session.ID, start, "memory.recalled", "memory", map[string]any{"count": len(exec.recalledMemories)}),
+		e.newEvent(exec.run, exec.task.ID, exec.session.ID, start+1, "prompt.built", "prompt", runPrompt.Metadata),
+		e.newEvent(exec.run, exec.task.ID, exec.session.ID, start+2, "context.built", "context", map[string]any{
 			"task_id":       exec.task.ID,
 			"plan_id":       exec.plan.ID,
 			"current_step":  exec.currentStep.ID,
@@ -224,23 +237,22 @@ func (e Executor) resolveInitialAction(runCtx context.Context, exec *runExecutio
 	if err := e.appendEvents(preModelEvents, exec.observer); err != nil {
 		return model.Action{}, err
 	}
-	exec.sequence += int64(len(preModelEvents))
 
 	if !activate && exec.state.ResumePhase == "post_tool" && hasPendingToolResults(exec.state) {
 		return e.resumePostToolAction(runCtx, exec)
 	}
 	if routedToMemory {
-		if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1, "memory.routed", "memory", map[string]any{
+		if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.nextSequence(), "memory.routed", "memory", map[string]any{
 			"count": len(exec.explicitMemoryCandidates),
 		}), exec.observer); err != nil {
 			return model.Action{}, err
 		}
-		exec.sequence++
 		exec.finalAnswer = exec.explicitMemoryAnswer
 		return model.Action{Action: "final", Answer: exec.finalAnswer}, nil
 	}
 
-	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1, "model.called", "runtime", map[string]any{
+	modelSequence := exec.nextSequence()
+	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, modelSequence, "model.called", "runtime", map[string]any{
 		"provider": exec.run.Provider,
 		"model":    exec.run.Model,
 		"role":     exec.run.Role,
@@ -254,13 +266,13 @@ func (e Executor) resolveInitialAction(runCtx context.Context, exec *runExecutio
 		Metadata:     runPrompt.Metadata,
 	}
 	modelResponse, err := e.generateWithModelTimeout(runCtx, exec.provider, modelRequest)
-	if appendErr := e.appendModelCall(exec.run, exec.sequence+1, "", "", modelRequest, responsePtr(modelResponse, err), err); appendErr != nil {
+	if appendErr := e.appendModelCall(exec.run, modelSequence, "", "", modelRequest, responsePtr(modelResponse, err), err); appendErr != nil {
 		return model.Action{}, appendErr
 	}
 	if err != nil {
-		return model.Action{}, e.failOnly(exec, err, exec.sequence+1)
+		return model.Action{}, e.failOnly(exec, err, exec.nextSequence())
 	}
-	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+2, "model.responded", "model", map[string]any{
+	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.nextSequence(), "model.responded", "model", map[string]any{
 		"finish_reason": modelResponse.FinishReason,
 	}), exec.observer); err != nil {
 		return model.Action{}, err
@@ -268,10 +280,9 @@ func (e Executor) resolveInitialAction(runCtx context.Context, exec *runExecutio
 
 	action := parseAction(modelResponse.Text)
 	if err := validateActionForRole(exec.run.Role, action); err != nil {
-		return model.Action{}, e.failOnly(exec, err, exec.sequence+3)
+		return model.Action{}, e.failOnly(exec, err, exec.nextSequence())
 	}
 	exec.finalAnswer = action.Answer
-	exec.sequence += 2
 	exec.turnCount = exec.state.TurnCount + 1
 	return action, nil
 }
@@ -352,23 +363,28 @@ func (e Executor) completeRun(exec *runExecution) (ExecutionResponse, error) {
 		}
 	}
 
+	count := 6
+	if exec.run.ParentRunID == "" {
+		count = 7
+	}
+	start := exec.reserveSequences(count)
 	finalEvents := []harnessruntime.Event{
-		e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1, "assistant.message", "assistant", map[string]any{
+		e.newEvent(exec.run, exec.task.ID, exec.session.ID, start, "assistant.message", "assistant", map[string]any{
 			"message_id": assistantMessage.ID,
 			"content":    assistantMessage.Content,
 		}),
-		e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+2, "result.generated", "runtime", map[string]any{"bytes": len(result.Output)}),
-		e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+3, "memory.candidate_extracted", "memory", map[string]any{"count": len(candidates)}),
+		e.newEvent(exec.run, exec.task.ID, exec.session.ID, start+1, "result.generated", "runtime", map[string]any{"bytes": len(result.Output)}),
+		e.newEvent(exec.run, exec.task.ID, exec.session.ID, start+2, "memory.candidate_extracted", "memory", map[string]any{"count": len(candidates)}),
 	}
 	offset := int64(3)
 	if exec.run.ParentRunID == "" {
-		finalEvents = append(finalEvents, e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+4, "memory.committed", "memory", map[string]any{"count": len(committedEntries)}))
+		finalEvents = append(finalEvents, e.newEvent(exec.run, exec.task.ID, exec.session.ID, start+3, "memory.committed", "memory", map[string]any{"count": len(committedEntries)}))
 		offset++
 	}
 	finalEvents = append(finalEvents,
-		e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+offset+1, "plan.step.completed", "runtime", map[string]any{"step_id": exec.currentStep.ID}),
-		e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+offset+2, "run.status_changed", "runtime", map[string]any{"from": harnessruntime.RunRunning, "to": harnessruntime.RunCompleted}),
-		e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+offset+3, "run.completed", "runtime", map[string]any{"run_id": exec.run.ID}),
+		e.newEvent(exec.run, exec.task.ID, exec.session.ID, start+offset, "plan.step.completed", "runtime", map[string]any{"step_id": exec.currentStep.ID}),
+		e.newEvent(exec.run, exec.task.ID, exec.session.ID, start+offset+1, "run.status_changed", "runtime", map[string]any{"from": harnessruntime.RunRunning, "to": harnessruntime.RunCompleted}),
+		e.newEvent(exec.run, exec.task.ID, exec.session.ID, start+offset+2, "run.completed", "runtime", map[string]any{"run_id": exec.run.ID}),
 	)
 	if err := e.appendEvents(finalEvents, exec.observer); err != nil {
 		return ExecutionResponse{}, err

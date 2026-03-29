@@ -16,13 +16,13 @@ import (
 func (e Executor) handleDelegationAction(runCtx context.Context, exec *runExecution, action model.Action) (model.Action, error) {
 	canDelegate, reason := e.DelegationManager.CanDelegate(runCtx, exec.run, *exec.currentStep)
 	if !canDelegate {
-		if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1, "subagent.rejected", "delegation", map[string]any{
+		if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.nextSequence(), "subagent.rejected", "delegation", map[string]any{
 			"step_id": exec.currentStep.ID,
 			"reason":  reason,
 		}), exec.observer); err != nil {
 			return model.Action{}, err
 		}
-		return model.Action{}, e.failOnly(exec, errors.New("delegation rejected: "+reason), exec.sequence+2)
+		return model.Action{}, e.failOnly(exec, errors.New("delegation rejected: "+reason), exec.nextSequence())
 	}
 
 	delegationGoal := strings.TrimSpace(action.DelegationGoal)
@@ -32,17 +32,18 @@ func (e Executor) handleDelegationAction(runCtx context.Context, exec *runExecut
 	delegationTask := e.DelegationManager.BuildTask(exec.run, exec.plan, *exec.currentStep, delegationGoal, exec.recalledMemories, exec.summaries)
 	childResponse, childResult, err := e.spawnChildRun(exec.task, exec.session, exec.run, delegationTask)
 	if err != nil {
-		return model.Action{}, e.failOnly(exec, err, exec.sequence+1)
+		return model.Action{}, e.failOnly(exec, err, exec.nextSequence())
 	}
 
-	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1, "subagent.spawned", "delegation", map[string]any{
+	start := exec.reserveSequences(2)
+	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, start, "subagent.spawned", "delegation", map[string]any{
 		"child_run_id": childResponse.Run.ID,
 		"step_id":      exec.currentStep.ID,
 		"role":         childResponse.Run.Role,
 	}), exec.observer); err != nil {
 		return model.Action{}, err
 	}
-	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+2, "subagent.completed", "delegation", map[string]any{
+	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, start+1, "subagent.completed", "delegation", map[string]any{
 		"child_run_id":    childResponse.Run.ID,
 		"needs_replan":    childResult.NeedsReplan,
 		"summary":         childResult.Summary,
@@ -50,7 +51,6 @@ func (e Executor) handleDelegationAction(runCtx context.Context, exec *runExecut
 	}), exec.observer); err != nil {
 		return model.Action{}, err
 	}
-	exec.sequence += 2
 
 	replanDecision := planner.DecideChildReplan(childResult)
 	if replanDecision.ShouldReplan {
@@ -74,7 +74,7 @@ func (e Executor) handleDelegationAction(runCtx context.Context, exec *runExecut
 		if err := e.StateStore.SavePlan(exec.plan); err != nil {
 			return model.Action{}, err
 		}
-		if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1, "plan.updated", "planner", map[string]any{
+		if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.nextSequence(), "plan.updated", "planner", map[string]any{
 			"plan_id": exec.plan.ID,
 			"version": exec.plan.Version,
 			"reason":  replanDecision.Reason,
@@ -82,7 +82,6 @@ func (e Executor) handleDelegationAction(runCtx context.Context, exec *runExecut
 		}), exec.observer); err != nil {
 			return model.Action{}, err
 		}
-		exec.sequence++
 	}
 
 	delegationEvidence := mergeWorkingEvidence(exec.workingEvidence, promptpkg.BuildWorkingEvidenceForPrompt([]harnessruntime.ToolCallResult{{
@@ -97,7 +96,8 @@ func (e Executor) handleDelegationAction(runCtx context.Context, exec *runExecut
 		Input:      map[string]any{"child_run_id": childResponse.Run.ID},
 		Result:     delegationResultContent(childResult),
 	}}, delegationEvidence, e.promptToolMetadataForSkill(exec.activeSkill), exec.activeSkill)
-	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+1, "model.called", "runtime", map[string]any{
+	modelSequence := exec.nextSequence()
+	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, modelSequence, "model.called", "runtime", map[string]any{
 		"provider": exec.run.Provider,
 		"model":    exec.run.Model,
 		"role":     exec.run.Role,
@@ -113,13 +113,13 @@ func (e Executor) handleDelegationAction(runCtx context.Context, exec *runExecut
 		Metadata:     followUpPrompt.Metadata,
 	}
 	followUpResponse, err := e.generateWithModelTimeout(runCtx, exec.provider, followUpRequest)
-	if appendErr := e.appendModelCall(exec.run, exec.sequence+1, "post_delegation", "subagent", followUpRequest, responsePtr(followUpResponse, err), err); appendErr != nil {
+	if appendErr := e.appendModelCall(exec.run, modelSequence, "post_delegation", "subagent", followUpRequest, responsePtr(followUpResponse, err), err); appendErr != nil {
 		return model.Action{}, appendErr
 	}
 	if err != nil {
-		return model.Action{}, e.failOnly(exec, err, exec.sequence+2)
+		return model.Action{}, e.failOnly(exec, err, exec.nextSequence())
 	}
-	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.sequence+2, "model.responded", "model", map[string]any{
+	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.nextSequence(), "model.responded", "model", map[string]any{
 		"finish_reason": followUpResponse.FinishReason,
 		"phase":         "post_delegation",
 	}), exec.observer); err != nil {
@@ -128,14 +128,13 @@ func (e Executor) handleDelegationAction(runCtx context.Context, exec *runExecut
 
 	followUpAction := parseAction(followUpResponse.Text)
 	if err := validateActionForRole(exec.run.Role, followUpAction); err != nil {
-		return model.Action{}, e.failOnly(exec, err, exec.sequence+3)
+		return model.Action{}, e.failOnly(exec, err, exec.nextSequence())
 	}
 	if followUpAction.Action != "final" || strings.TrimSpace(followUpAction.Answer) == "" {
-		return model.Action{}, e.failOnly(exec, errors.New("post-delegation model response did not produce a final answer"), exec.sequence+3)
+		return model.Action{}, e.failOnly(exec, errors.New("post-delegation model response did not produce a final answer"), exec.nextSequence())
 	}
 
 	exec.finalAnswer = followUpAction.Answer
-	exec.sequence += 2
 	exec.turnCount++
 	return followUpAction, nil
 }

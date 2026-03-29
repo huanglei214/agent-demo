@@ -3,6 +3,7 @@ package filesystem
 import (
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -188,6 +189,9 @@ func TestStateStoreSaveAndLoadRunArtifacts(t *testing.T) {
 	if _, err := os.Stat(paths.SessionMessagesPath(session.ID)); err != nil {
 		t.Fatalf("session messages file missing: %v", err)
 	}
+	if _, err := os.Stat(paths.SessionRunPath(session.ID, run.ID)); err != nil {
+		t.Fatalf("session run index file missing: %v", err)
+	}
 
 	gotRun, err := stateStore.LoadRun(run.ID)
 	if err != nil {
@@ -265,6 +269,54 @@ func TestStateStoreSaveAndLoadRunArtifacts(t *testing.T) {
 	}
 	if len(recentMessages) != 1 || recentMessages[0].ID != "msg_2" {
 		t.Fatalf("unexpected recent session messages: %#v", recentMessages)
+	}
+}
+
+func TestStateStoreLoadsLargeJSONLLines(t *testing.T) {
+	t.Parallel()
+
+	paths := store.NewPaths(t.TempDir())
+	stateStore := NewStateStore(paths)
+	large := strings.Repeat("x", 80*1024)
+	now := time.Now().UTC()
+	runID := "run_large"
+	sessionID := "session_large"
+
+	if err := stateStore.AppendModelCall(harnessruntime.ModelCall{
+		ID:        "modelcall_large",
+		RunID:     runID,
+		Sequence:  1,
+		Request:   harnessruntime.ModelRequestSnapshot{Input: large},
+		Response:  &harnessruntime.ModelResponseSnapshot{Text: large},
+		Timestamp: now,
+	}); err != nil {
+		t.Fatalf("append model call: %v", err)
+	}
+	if err := stateStore.AppendSessionMessage(harnessruntime.SessionMessage{
+		ID:        "msg_large",
+		SessionID: sessionID,
+		RunID:     runID,
+		Role:      harnessruntime.MessageRoleAssistant,
+		Content:   large,
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("append session message: %v", err)
+	}
+
+	modelCalls, err := stateStore.LoadModelCalls(runID)
+	if err != nil {
+		t.Fatalf("load model calls: %v", err)
+	}
+	if len(modelCalls) != 1 || modelCalls[0].Request.Input != large || modelCalls[0].Response == nil || modelCalls[0].Response.Text != large {
+		t.Fatalf("unexpected large model call payload: %#v", modelCalls)
+	}
+
+	messages, err := stateStore.LoadSessionMessages(sessionID)
+	if err != nil {
+		t.Fatalf("load session messages: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Content != large {
+		t.Fatalf("unexpected large session message payload: %#v", messages)
 	}
 }
 

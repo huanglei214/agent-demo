@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -207,5 +208,54 @@ func TestCommitPreservesEntriesAcrossConcurrentWriters(t *testing.T) {
 	}
 	if len(recalled) != 2 {
 		t.Fatalf("expected both concurrent entries to persist, got %#v", recalled)
+	}
+}
+
+func TestRecallUsesShardedMemoryFilesWhenPrimarySnapshotIsMissing(t *testing.T) {
+	t.Parallel()
+
+	paths := store.NewPaths(t.TempDir())
+	manager := NewManager(paths)
+	now := time.Now()
+
+	if err := manager.Commit([]harnessruntime.MemoryEntry{
+		{
+			ID:          "mem_session",
+			SessionID:   "session_1",
+			Scope:       "session",
+			Kind:        "fact",
+			Content:     "Wuhan weather reference",
+			SourceRunID: "run_session",
+			CreatedAt:   now,
+		},
+		{
+			ID:          "mem_shared",
+			SessionID:   "session_1",
+			Scope:       "workspace",
+			Kind:        "fact",
+			Content:     "Wuhan workspace convention",
+			SourceRunID: "run_shared",
+			CreatedAt:   now,
+		},
+	}); err != nil {
+		t.Fatalf("commit memories: %v", err)
+	}
+	if err := os.Remove(paths.MemoriesPath()); err != nil {
+		t.Fatalf("remove primary memories snapshot: %v", err)
+	}
+
+	recalled, err := manager.Recall(RecallQuery{
+		SessionID: "session_1",
+		Goal:      "Wuhan",
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("recall memories: %v", err)
+	}
+	if len(recalled) != 2 {
+		t.Fatalf("expected recall to fall back to shard files, got %#v", recalled)
+	}
+	if recalled[0].ID != "mem_session" {
+		t.Fatalf("expected session-scoped shard result first, got %#v", recalled)
 	}
 }

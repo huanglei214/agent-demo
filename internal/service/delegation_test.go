@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/huanglei214/agent-demo/internal/agent"
 	"github.com/huanglei214/agent-demo/internal/config"
 	"github.com/huanglei214/agent-demo/internal/delegation"
 	"github.com/huanglei214/agent-demo/internal/model"
@@ -22,8 +23,7 @@ func TestStartRunWithDelegationCreatesChildRunArtifacts(t *testing.T) {
 		t.Fatalf("seed README: %v", err)
 	}
 
-	services := NewServices(config.Load(workspace))
-	configureDelegationWithoutReplan(t, &services)
+	services := newTestServices(t, config.Load(workspace), configureDelegationWithoutReplan(t))
 	response, err := services.StartRun(RunRequest{
 		Instruction: "请委派一个子任务来分析这个仓库，然后给我总结",
 		Workspace:   workspace,
@@ -140,8 +140,7 @@ func TestStartRunWithDelegationSkipsReplanWithoutSignal(t *testing.T) {
 		t.Fatalf("seed README: %v", err)
 	}
 
-	services := NewServices(config.Load(workspace))
-	configureDelegationWithoutReplan(t, &services)
+	services := newTestServices(t, config.Load(workspace), configureDelegationWithoutReplan(t))
 	response, err := services.StartRun(RunRequest{
 		Instruction: "请委派一个子任务来分析这个仓库，然后给我总结",
 		Workspace:   workspace,
@@ -202,40 +201,42 @@ func mustActionJSON(t *testing.T, action model.Action) string {
 	return string(data)
 }
 
-func configureDelegationWithoutReplan(t *testing.T, services *Services) {
+func configureDelegationWithoutReplan(t *testing.T) testServicesMutator {
 	t.Helper()
 
-	factoryCalls := 0
-	services.ModelFactory = func() (model.Model, error) {
-		factoryCalls++
-		switch factoryCalls {
-		case 1:
-			return &scriptedModel{responses: []model.Response{
-				{
-					Text: mustActionJSON(t, model.Action{
-						Action:         "delegate",
-						DelegationGoal: "分析当前仓库并给出简短摘要",
-					}),
-					FinishReason: "stop",
-				},
-				{
-					Text: mustActionJSON(t, model.Action{
-						Action: "final",
-						Answer: "parent summary after delegation",
-					}),
-					FinishReason: "stop",
-				},
-			}}, nil
-		case 2:
-			return &scriptedModel{responses: []model.Response{
-				{
-					Text:         `{"summary":"Delegated child analysis completed successfully.","artifacts":[],"findings":[],"risks":[],"recommendations":[],"needs_replan":false}`,
-					FinishReason: "stop",
-				},
-			}}, nil
-		default:
-			t.Fatalf("unexpected model factory call %d", factoryCalls)
-			return nil, nil
+	return func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		factoryCalls := 0
+		modelServices.ModelFactory = func() (model.Model, error) {
+			factoryCalls++
+			switch factoryCalls {
+			case 1:
+				return &scriptedModel{responses: []model.Response{
+					{
+						Text: mustActionJSON(t, model.Action{
+							Action:         "delegate",
+							DelegationGoal: "分析当前仓库并给出简短摘要",
+						}),
+						FinishReason: "stop",
+					},
+					{
+						Text: mustActionJSON(t, model.Action{
+							Action: "final",
+							Answer: "parent summary after delegation",
+						}),
+						FinishReason: "stop",
+					},
+				}}, nil
+			case 2:
+				return &scriptedModel{responses: []model.Response{
+					{
+						Text:         `{"summary":"Delegated child analysis completed successfully.","artifacts":[],"findings":[],"risks":[],"recommendations":[],"needs_replan":false}`,
+						FinishReason: "stop",
+					},
+				}}, nil
+			default:
+				t.Fatalf("unexpected model factory call %d", factoryCalls)
+				return nil, nil
+			}
 		}
 	}
 }
@@ -247,33 +248,34 @@ func TestStartRunWithDelegationRejectsUnstructuredChildResult(t *testing.T) {
 		t.Fatalf("seed README: %v", err)
 	}
 
-	services := NewServices(config.Load(workspace))
-	factoryCalls := 0
-	services.ModelFactory = func() (model.Model, error) {
-		factoryCalls++
-		switch factoryCalls {
-		case 1:
-			return &scriptedModel{responses: []model.Response{
-				{
-					Text: mustActionJSON(t, model.Action{
-						Action:         "delegate",
-						DelegationGoal: "分析当前仓库并给出简短摘要",
-					}),
-					FinishReason: "stop",
-				},
-			}}, nil
-		case 2:
-			return &scriptedModel{responses: []model.Response{
-				{
-					Text:         `不是结构化结果`,
-					FinishReason: "stop",
-				},
-			}}, nil
-		default:
-			t.Fatalf("unexpected model factory call %d", factoryCalls)
-			return nil, nil
+	services := newTestServices(t, config.Load(workspace), func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		factoryCalls := 0
+		modelServices.ModelFactory = func() (model.Model, error) {
+			factoryCalls++
+			switch factoryCalls {
+			case 1:
+				return &scriptedModel{responses: []model.Response{
+					{
+						Text: mustActionJSON(t, model.Action{
+							Action:         "delegate",
+							DelegationGoal: "分析当前仓库并给出简短摘要",
+						}),
+						FinishReason: "stop",
+					},
+				}}, nil
+			case 2:
+				return &scriptedModel{responses: []model.Response{
+					{
+						Text:         `不是结构化结果`,
+						FinishReason: "stop",
+					},
+				}}, nil
+			default:
+				t.Fatalf("unexpected model factory call %d", factoryCalls)
+				return nil, nil
+			}
 		}
-	}
+	})
 
 	_, err := services.StartRun(RunRequest{
 		Instruction: "请委派一个子任务来分析这个仓库，然后给我总结",
@@ -297,36 +299,37 @@ func TestStartRunWithDelegationRejectsNestedDelegationFromChild(t *testing.T) {
 		t.Fatalf("seed README: %v", err)
 	}
 
-	services := NewServices(config.Load(workspace))
-	factoryCalls := 0
-	services.ModelFactory = func() (model.Model, error) {
-		factoryCalls++
-		switch factoryCalls {
-		case 1:
-			return &scriptedModel{responses: []model.Response{
-				{
-					Text: mustActionJSON(t, model.Action{
-						Action:         "delegate",
-						DelegationGoal: "分析当前仓库并给出简短摘要",
-					}),
-					FinishReason: "stop",
-				},
-			}}, nil
-		case 2:
-			return &scriptedModel{responses: []model.Response{
-				{
-					Text: mustActionJSON(t, model.Action{
-						Action:         "delegate",
-						DelegationGoal: "继续委派给另一个子代理",
-					}),
-					FinishReason: "stop",
-				},
-			}}, nil
-		default:
-			t.Fatalf("unexpected model factory call %d", factoryCalls)
-			return nil, nil
+	services := newTestServices(t, config.Load(workspace), func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		factoryCalls := 0
+		modelServices.ModelFactory = func() (model.Model, error) {
+			factoryCalls++
+			switch factoryCalls {
+			case 1:
+				return &scriptedModel{responses: []model.Response{
+					{
+						Text: mustActionJSON(t, model.Action{
+							Action:         "delegate",
+							DelegationGoal: "分析当前仓库并给出简短摘要",
+						}),
+						FinishReason: "stop",
+					},
+				}}, nil
+			case 2:
+				return &scriptedModel{responses: []model.Response{
+					{
+						Text: mustActionJSON(t, model.Action{
+							Action:         "delegate",
+							DelegationGoal: "继续委派给另一个子代理",
+						}),
+						FinishReason: "stop",
+					},
+				}}, nil
+			default:
+				t.Fatalf("unexpected model factory call %d", factoryCalls)
+				return nil, nil
+			}
 		}
-	}
+	})
 
 	_, err := services.StartRun(RunRequest{
 		Instruction: "请委派一个子任务来分析这个仓库，然后给我总结",

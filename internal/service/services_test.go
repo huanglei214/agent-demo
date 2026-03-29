@@ -4,12 +4,14 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/huanglei214/agent-demo/internal/agent"
 	"github.com/huanglei214/agent-demo/internal/config"
 	harnesscontext "github.com/huanglei214/agent-demo/internal/context"
 	"github.com/huanglei214/agent-demo/internal/memory"
 	"github.com/huanglei214/agent-demo/internal/prompt"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
 	"github.com/huanglei214/agent-demo/internal/skill"
+	"github.com/huanglei214/agent-demo/internal/store"
 )
 
 func TestNewServicesExposeToolAccessAndReadOnlyDelegationPolicy(t *testing.T) {
@@ -79,7 +81,7 @@ func TestNewServicesUnsupportedProviderUsesSentinelError(t *testing.T) {
 	cfg := config.Load(t.TempDir())
 	cfg.Model.Provider = "unknown"
 
-	_, err := NewServices(cfg).ModelFactory()
+	_, err := newModelServices(cfg).ModelFactory()
 	if err == nil {
 		t.Fatal("expected unsupported provider error")
 	}
@@ -88,24 +90,34 @@ func TestNewServicesUnsupportedProviderUsesSentinelError(t *testing.T) {
 	}
 }
 
-func TestNewServicesFromDependenciesAcceptsInterfaceImplementations(t *testing.T) {
+func TestNewServicesFromPartsAcceptsInterfaceImplementations(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Load(t.TempDir())
-	deps := NewDependencies(cfg)
-	deps.MemoryManager = stubMemoryService{}
-	deps.ContextManager = stubContextService{}
-	deps.PromptBuilder = stubPromptService{}
+	paths := store.NewPaths(cfg.Runtime.Root)
+	runtimeServices := newRuntimeServices(paths)
+	modelServices := newModelServices(cfg)
+	agentServices := newAgentServices(cfg, paths)
+	toolServices := newToolServices(cfg.Workspace)
+	delegationServices := newDelegationServices(cfg, paths, toolServices)
 
-	services := NewServicesFromDependencies(deps)
-	if services.MemoryManager == nil {
-		t.Fatal("expected custom memory service to be wired")
+	agentServices.MemoryManager = stubMemoryService{}
+	agentServices.ContextManager = stubContextService{}
+	modelServices.PromptBuilder = stubPromptService{}
+
+	services := NewServicesFromParts(cfg, runtimeServices, modelServices, agentServices, toolServices, delegationServices)
+	executor, ok := services.Runner.(agent.Executor)
+	if !ok {
+		t.Fatalf("expected runner to be agent.Executor, got %T", services.Runner)
 	}
-	if services.ContextManager == nil {
-		t.Fatal("expected custom context service to be wired")
+	if executor.MemoryManager == nil {
+		t.Fatal("expected custom memory service to be wired into executor")
 	}
-	if services.PromptBuilder == nil {
-		t.Fatal("expected custom prompt service to be wired")
+	if executor.ContextManager == nil {
+		t.Fatal("expected custom context service to be wired into executor")
+	}
+	if executor.PromptBuilder == nil {
+		t.Fatal("expected custom prompt service to be wired into executor")
 	}
 }
 
