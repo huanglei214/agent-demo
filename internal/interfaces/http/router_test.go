@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -274,6 +275,9 @@ func TestAGUIChatEndpoint(t *testing.T) {
 	t.Parallel()
 
 	handler, services := newTestHandler(t)
+	if err := os.WriteFile(filepath.Join(services.Config.Workspace, "README.md"), []byte("# test\n"), 0o644); err != nil {
+		t.Fatalf("seed README: %v", err)
+	}
 
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/agui/chat", bytes.NewBufferString(`{
@@ -300,6 +304,54 @@ func TestAGUIChatEndpoint(t *testing.T) {
 	}
 	if strings.Index(bodyText, `"type":"RUN_STARTED"`) > strings.Index(bodyText, `"type":"RUN_FINISHED"`) {
 		t.Fatalf("expected RUN_STARTED before RUN_FINISHED, got %s", bodyText)
+	}
+}
+
+func TestAGUIChatEndpointPassesPlanModeThroughToRun(t *testing.T) {
+	t.Parallel()
+
+	handler, services := newTestHandler(t)
+	if err := os.WriteFile(filepath.Join(services.Config.Workspace, "README.md"), []byte("# test\n"), 0o644); err != nil {
+		t.Fatalf("seed README: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/agui/chat", bytes.NewBufferString(`{
+		"messages": [{"id":"msg_user_1","role":"user","content":"先阅读 README.md，再检查 docs/，最后总结当前项目状态"}],
+		"state": {"workspace":"`+services.Config.Workspace+`","provider":"mock","model":"mock-model","maxTurns":4, "planMode":"none"}
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(recorder, req)
+
+	bodyText := recorder.Body.String()
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, bodyText)
+	}
+
+	runs, err := services.ListRuns(1)
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(runs) == 0 {
+		t.Fatalf("expected at least one run, got %#v", runs)
+	}
+
+	inspection, err := services.InspectRun(runs[0].ID)
+	if err != nil {
+		t.Fatalf("inspect run: %v", err)
+	}
+	if inspection.Run.PlanMode != harnessruntime.PlanModeNone {
+		t.Fatalf("expected explicit plan mode none, got %#v", inspection.Run)
+	}
+	for _, needle := range []string{
+		`"type":"STATE_SNAPSHOT"`,
+		`"planMode":"none"`,
+		`"todos":null`,
+		`"type":"RUN_FINISHED"`,
+	} {
+		if !strings.Contains(bodyText, needle) {
+			t.Fatalf("expected stream body to contain %s, got %s", needle, bodyText)
+		}
 	}
 }
 

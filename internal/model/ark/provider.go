@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/volcengine/volcengine-go-sdk/service/arkruntime"
@@ -16,8 +17,17 @@ import (
 )
 
 type Provider struct {
-	config config.ModelConfig
-	http   *http.Client
+	config       config.ModelConfig
+	http         *http.Client
+	concurrency  chan struct{}
+	tokenLimiter *tokenLimiter
+	wait         func(context.Context, time.Duration) error
+}
+
+type tokenLimiter struct {
+	mu            sync.Mutex
+	tokensPerSec  float64
+	nextAllowedAt time.Time
 }
 
 type ErrorKind string
@@ -86,12 +96,23 @@ func New(cfg config.ModelConfig) Provider {
 	if timeout <= 0 {
 		timeout = 90
 	}
-	return Provider{
+
+	provider := Provider{
 		config: cfg,
 		http: &http.Client{
 			Timeout: time.Duration(timeout) * time.Second,
 		},
+		wait: sleepWithContext,
 	}
+	if cfg.Ark.MaxConcurrent > 0 {
+		provider.concurrency = make(chan struct{}, cfg.Ark.MaxConcurrent)
+	}
+	if cfg.Ark.TPM > 0 {
+		provider.tokenLimiter = &tokenLimiter{
+			tokensPerSec: float64(cfg.Ark.TPM) / 60.0,
+		}
+	}
+	return provider
 }
 
 func (p Provider) Generate(ctx context.Context, req internalmodel.Request) (internalmodel.Response, error) {
@@ -100,6 +121,15 @@ func (p Provider) Generate(ctx context.Context, req internalmodel.Request) (inte
 			Kind:    ErrorKindConfig,
 			Message: "provider is not configured",
 		}
+	}
+
+	if err := p.acquireConcurrency(ctx); err != nil {
+		return internalmodel.Response{}, err
+	}
+	defer p.releaseConcurrency()
+
+	if err := p.waitForTokenBudget(ctx, estimateRequestTokens(req)); err != nil {
+		return internalmodel.Response{}, err
 	}
 
 	client := arkruntime.NewClientWithApiKey(
@@ -151,6 +181,89 @@ func (p Provider) Generate(ctx context.Context, req internalmodel.Request) (inte
 			"usage":   usageMetadata(resp.Usage),
 		},
 	}, nil
+}
+
+func (p Provider) acquireConcurrency(ctx context.Context) error {
+	if p.concurrency == nil {
+		return nil
+	}
+	select {
+	case p.concurrency <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return classifyTransportError(ctx, ctx.Err())
+	}
+}
+
+func (p Provider) releaseConcurrency() {
+	if p.concurrency == nil {
+		return
+	}
+	select {
+	case <-p.concurrency:
+	default:
+	}
+}
+
+func (p Provider) waitForTokenBudget(ctx context.Context, tokens int) error {
+	if p.tokenLimiter == nil || tokens <= 0 {
+		return nil
+	}
+	delay := p.tokenLimiter.reserve(tokens)
+	if delay <= 0 {
+		return nil
+	}
+	return p.wait(ctx, delay)
+}
+
+func (l *tokenLimiter) reserve(tokens int) time.Duration {
+	if l == nil || tokens <= 0 || l.tokensPerSec <= 0 {
+		return 0
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+	if l.nextAllowedAt.Before(now) {
+		l.nextAllowedAt = now
+	}
+	start := l.nextAllowedAt
+	seconds := float64(tokens) / l.tokensPerSec
+	l.nextAllowedAt = l.nextAllowedAt.Add(time.Duration(seconds * float64(time.Second)))
+	if start.After(now) {
+		return start.Sub(now)
+	}
+	return 0
+}
+
+func estimateRequestTokens(req internalmodel.Request) int {
+	chars := len(req.SystemPrompt) + len(req.Input)
+	if chars <= 0 {
+		return 1
+	}
+	tokens := chars / 4
+	if chars%4 != 0 {
+		tokens += 1
+	}
+	if tokens < 1 {
+		return 1
+	}
+	return tokens
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return classifyTransportError(ctx, ctx.Err())
+	}
 }
 
 func classifySDKError(ctx context.Context, err error) error {

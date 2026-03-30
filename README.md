@@ -120,30 +120,19 @@ make chat PROVIDER=mock
 make verify-scenarios
 ```
 
-使用 Ark 时常见环境变量：
+工作区配置文件：
+
+- `config.json`：非敏感配置
+- `.env`：敏感配置，当前主要是 `ARK_API_KEY`
+
+推荐做法：
 
 ```bash
-export ARK_API_KEY=your_api_key
-export ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-export ARK_MODEL_ID=your_model_id
+cp config.example.json config.json
+cp .env.example .env
 ```
 
-可选覆盖：
-
-```bash
-export HARNESS_PROVIDER=ark
-export HARNESS_MODEL=$ARK_MODEL_ID
-export HARNESS_MODEL_TIMEOUT_SECONDS=90
-```
-
-配置覆盖优先级：
-
-1. `~/.agent-demo/config.json`
-2. `<workspace>/.agent-demo.json`
-3. 环境变量
-4. 显式 CLI / Web 启动参数
-
-示例工作区配置：
+`config.json` 示例：
 
 ```json
 {
@@ -151,11 +140,39 @@ export HARNESS_MODEL_TIMEOUT_SECONDS=90
     "root": ".runtime"
   },
   "model": {
-    "provider": "mock",
-    "timeout_seconds": 90
+    "provider": "ark",
+    "model": "ep-xxxxxxxx",
+    "timeout_seconds": 90,
+    "ark": {
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key": "${ARK_API_KEY}",
+      "model_id": "ep-xxxxxxxx",
+      "tpm": 120000,
+      "max_concurrent": 2
+    }
   }
 }
 ```
+
+`.env` 示例：
+
+```bash
+ARK_API_KEY=your_api_key
+```
+
+配置覆盖优先级：
+
+1. `<workspace>/config.json`
+2. `<workspace>/.env`
+3. 进程环境变量
+4. 显式 CLI / Web 启动参数
+
+Ark provider 额外支持两个限流配置：
+
+- `model.ark.tpm`：每分钟 token 预算
+- `model.ark.max_concurrent`：同时最多几个 Ark 请求
+
+如果你在 Web 验证时经常碰到 429，优先配置这两个值，而不是靠重复点击重试。
 
 ## Web UI
 

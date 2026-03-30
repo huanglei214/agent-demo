@@ -19,4 +19,5 @@ type RequestState struct {
 	Provider  string `json:"provider"`
 	Model     string `json:"model"`
 	MaxTurns  int    `json:"maxTurns"`
+	PlanMode  string `json:"planMode"`
 }

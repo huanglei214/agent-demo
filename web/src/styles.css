@@ -879,7 +879,8 @@ textarea {
   letter-spacing: 0.12em;
 }
 
-.chat-inline-field input {
+.chat-inline-field input,
+.chat-inline-field select {
   width: 100%;
   border: 0;
   border-radius: 14px;

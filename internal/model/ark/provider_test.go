@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -208,4 +209,114 @@ func jsonResponse(statusCode int, body map[string]any) (*http.Response, error) {
 		Header:     make(http.Header),
 		Body:       io.NopCloser(bytes.NewReader(data)),
 	}, nil
+}
+
+func TestGenerateWaitsForTokenBudgetBeforeSendingRequest(t *testing.T) {
+	t.Parallel()
+
+	provider := New(config.ModelConfig{
+		Ark: config.ArkConfig{
+			APIKey:        "test-key",
+			BaseURL:       "https://ark.example.com",
+			ModelID:       "ark-test",
+			TPM:           120,
+			MaxConcurrent: 1,
+		},
+	})
+	provider.tokenLimiter.nextAllowedAt = time.Now().Add(10 * time.Second)
+
+	var waited time.Duration
+	provider.wait = func(ctx context.Context, delay time.Duration) error {
+		waited = delay
+		return nil
+	}
+	provider.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return jsonResponse(http.StatusOK, map[string]any{
+				"id":      "resp_1",
+				"model":   "ark-test",
+				"created": 123,
+				"choices": []map[string]any{{
+					"finish_reason": "stop",
+					"index":         0,
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": `{"action":"final","answer":"hello"}`,
+					},
+				}},
+			})
+		}),
+	}
+
+	_, err := provider.Generate(context.Background(), model.Request{
+		SystemPrompt: strings.Repeat("s", 12),
+		Input:        strings.Repeat("i", 12),
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if waited < 9*time.Second {
+		t.Fatalf("expected token limiter wait close to 10s, got %s", waited)
+	}
+}
+
+func TestGenerateLimitsConcurrentRequests(t *testing.T) {
+	t.Parallel()
+
+	provider := New(config.ModelConfig{
+		Ark: config.ArkConfig{
+			APIKey:        "test-key",
+			BaseURL:       "https://ark.example.com",
+			ModelID:       "ark-test",
+			MaxConcurrent: 1,
+		},
+	})
+
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	provider.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			entered <- struct{}{}
+			<-release
+			return jsonResponse(http.StatusOK, map[string]any{
+				"id":      "resp_1",
+				"model":   "ark-test",
+				"created": 123,
+				"choices": []map[string]any{{
+					"finish_reason": "stop",
+					"index":         0,
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": `{"action":"final","answer":"hello"}`,
+					},
+				}},
+			})
+		}),
+	}
+
+	errCh := make(chan error, 2)
+	request := model.Request{SystemPrompt: "system", Input: "hello"}
+	for range 2 {
+		go func() {
+			_, err := provider.Generate(context.Background(), request)
+			errCh <- err
+		}()
+	}
+
+	<-entered
+	select {
+	case <-entered:
+		t.Fatal("expected second request to wait for concurrency slot")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	release <- struct{}{}
+	<-entered
+	release <- struct{}{}
+
+	for range 2 {
+		if err := <-errCh; err != nil {
+			t.Fatalf("generate: %v", err)
+		}
+	}
 }

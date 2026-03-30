@@ -1,0 +1,17 @@
+{
+  "runtime": {
+    "root": ".runtime"
+  },
+  "model": {
+    "provider": "ark",
+    "model": "ep-xxxxxxxx",
+    "timeout_seconds": 90,
+    "ark": {
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key": "${ARK_API_KEY}",
+      "model_id": "ep-xxxxxxxx",
+      "tpm": 120000,
+      "max_concurrent": 2
+    }
+  }
+}

@@ -161,6 +161,10 @@ type Dictionary = {
     provider: string;
     model: string;
     maxTurns: string;
+    planMode: string;
+    planModeAuto: string;
+    planModeNone: string;
+    planModeTodo: string;
     prompt: string;
     promptPlaceholder: string;
     send: string;
@@ -360,6 +364,10 @@ const dictionaries: Record<Language, Dictionary> = {
       provider: "Provider",
       model: "Model",
       maxTurns: "Max turns",
+      planMode: "Plan mode",
+      planModeAuto: "Auto",
+      planModeNone: "None",
+      planModeTodo: "Todo",
       prompt: "Message",
       promptPlaceholder: "Ask the agent to inspect code, explain a bug, or summarize the repo.",
       send: "Send message",
@@ -548,6 +556,10 @@ const dictionaries: Record<Language, Dictionary> = {
       provider: "Provider",
       model: "模型",
       maxTurns: "最大轮数",
+      planMode: "规划模式",
+      planModeAuto: "自动",
+      planModeNone: "关闭",
+      planModeTodo: "Todo",
       prompt: "消息",
       promptPlaceholder: "让 agent 检查代码、解释 bug，或者总结仓库状态。",
       send: "发送消息",

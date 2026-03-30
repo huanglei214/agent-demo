@@ -57,3 +57,6 @@ Icon\r
 .Trashes
 .VolumeIcon.icns
 .com.apple.timemachine.donotpresent
+
+# Local config
+config.json

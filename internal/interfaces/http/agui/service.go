@@ -41,6 +41,7 @@ func (s Service) StreamChat(ctx context.Context, req ChatRequest, writer *SSEWri
 	if maxTurns <= 0 {
 		maxTurns = 20
 	}
+	planMode := strings.TrimSpace(req.State.PlanMode)
 
 	threadID := strings.TrimSpace(req.ThreadID)
 	if threadID == "" {
@@ -59,6 +60,7 @@ func (s Service) StreamChat(ctx context.Context, req ChatRequest, writer *SSEWri
 			Model:       model,
 			MaxTurns:    maxTurns,
 			SessionID:   threadID,
+			PlanMode:    harnessruntime.PlanMode(planMode),
 		}, observer)
 		outcomeCh <- runOutcome{response: response, err: err}
 		close(outcomeCh)
@@ -176,6 +178,8 @@ func (s Service) initialSnapshots(runID, sessionID string) ([]Event, error) {
 				"turnCount":     state.TurnCount,
 				"provider":      run.Provider,
 				"model":         run.Model,
+				"planMode":      run.PlanMode,
+				"todos":         state.Todos,
 			},
 		},
 	}, nil

@@ -24,11 +24,20 @@ export type Task = {
   created_at: string;
 };
 
+export type TodoItem = {
+  id: string;
+  content: string;
+  status: string;
+  priority?: number;
+  updated_at?: string;
+};
+
 export type Run = {
   id: string;
   task_id: string;
   session_id: string;
   parent_run_id?: string;
+  plan_mode?: string;
   status: string;
   current_step_id?: string;
   provider: string;
@@ -104,6 +113,7 @@ export type StartRunRequest = {
   model?: string;
   max_turns?: number;
   session_id?: string;
+  plan_mode?: string;
 };
 
 export type StartRunResponse = {
@@ -154,6 +164,7 @@ export type InspectRunResponse = {
     resume_phase?: string;
     pending_tool_name?: string;
     pending_tool_result?: Record<string, unknown>;
+    todos?: TodoItem[];
     updated_at: string;
   };
   result?: RunResult;
@@ -244,6 +255,7 @@ export type AGUIChatRequest = {
     provider?: string;
     model?: string;
     maxTurns?: number;
+    planMode?: "" | "none" | "todo";
   };
   context?: Record<string, unknown>;
 };
@@ -269,7 +281,10 @@ export type AGUIEvent = {
   args?: unknown;
   result?: unknown;
   messages?: AGUIMessage[];
-  snapshot?: Record<string, unknown>;
+  snapshot?: Record<string, unknown> & {
+    planMode?: string;
+    todos?: TodoItem[];
+  };
   name?: string;
   value?: unknown;
   error?: string;

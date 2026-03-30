@@ -44,6 +44,7 @@ type ChatFormState = {
   provider: string;
   model: string;
   maxTurns: number;
+  planMode: "" | "none" | "todo";
   prompt: string;
 };
 
@@ -52,6 +53,7 @@ const initialForm: ChatFormState = {
   provider: "",
   model: "",
   maxTurns: 8,
+  planMode: "",
   prompt: "",
 };
 
@@ -233,6 +235,7 @@ export function ChatPage({
         provider: form.provider,
         model: form.model,
         maxTurns: form.maxTurns,
+        planMode: form.planMode,
       },
       context: activeSessionId ? { sessionId: activeSessionId } : undefined,
     };
@@ -501,6 +504,24 @@ export function ChatPage({
         {/* Common Composer for both empty state and conversation */}
         <div className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-[#212121] via-[#212121] to-transparent pt-10 pb-6 px-4 z-10 pointer-events-none transition-all duration-300 ${!conversationStarted ? 'translate-y-[-20vh]' : ''}`}>
           <form className="chat-composer-shell max-w-3xl mx-auto w-full relative pointer-events-auto" onSubmit={handleSubmit}>
+            <div className="chat-composer-meta">
+              <ComposerField label={copy.chat.planMode} size="small">
+                <select
+                  aria-label={copy.chat.planMode}
+                  value={form.planMode}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      planMode: event.target.value as ChatFormState["planMode"],
+                    }))
+                  }
+                >
+                  <option value="">{copy.chat.planModeAuto}</option>
+                  <option value="none">{copy.chat.planModeNone}</option>
+                  <option value="todo">{copy.chat.planModeTodo}</option>
+                </select>
+              </ComposerField>
+            </div>
             <div className="chat-composer rounded-3xl bg-[#303030] shadow-lg flex items-end px-4 py-3 gap-3">
               <button className="text-gray-400 hover:text-white transition-colors flex-shrink-0 self-center h-[32px] w-[32px] flex items-center justify-center rounded-full hover:bg-white/10" type="button" aria-label={copy.chat.newChat} onClick={handleNewChat}>
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="block m-auto">
@@ -527,7 +548,7 @@ export function ChatPage({
                       }
                     }
                   }}
-                  placeholder="今天我能为你做什么呢？"
+                  placeholder={copy.chat.promptPlaceholder}
                 />
               </div>
               <button
