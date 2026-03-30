@@ -4,11 +4,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 )
+
+const defaultTavilyEndpoint = "https://api.tavily.com"
+
+type tavilyClient struct {
+	httpClient *http.Client
+	endpoint   string
+	apiKey     string
+}
 
 type tavilySearchRequest struct {
 	Query      string `json:"query"`
@@ -54,29 +64,43 @@ func (e *tavilyHTTPError) Error() string {
 	return fmt.Sprintf("tavily request failed with status %d: %s", e.StatusCode, strings.TrimSpace(e.Body))
 }
 
-func doTavilyRequest(
-	ctx context.Context,
-	client *http.Client,
-	endpoint string,
-	apiKey string,
-	method string,
-	requestBody any,
-	responseBody any,
-) error {
+func (c tavilyClient) search(ctx context.Context, request tavilySearchRequest) (tavilySearchResponse, error) {
+	var response tavilySearchResponse
+	err := c.doRequest(ctx, "search", request, &response)
+	return response, err
+}
+
+func (c tavilyClient) extract(ctx context.Context, request tavilyExtractRequest) (tavilyExtractResponse, error) {
+	var response tavilyExtractResponse
+	err := c.doRequest(ctx, "extract", request, &response)
+	return response, err
+}
+
+func (c tavilyClient) doRequest(ctx context.Context, method string, requestBody any, responseBody any) error {
 	payload, err := json.Marshal(requestBody)
 	if err != nil {
 		return err
+	}
+
+	httpClient := c.httpClient
+	if httpClient == nil {
+		httpClient = &http.Client{}
+	}
+
+	endpoint := strings.TrimSpace(c.endpoint)
+	if endpoint == "" {
+		endpoint = defaultTavilyEndpoint
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(endpoint, "/")+"/"+method, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "agent-demo/1.0 (+https://localhost)")
 
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -93,4 +117,23 @@ func doTavilyRequest(
 		return nil
 	}
 	return json.Unmarshal(body, responseBody)
+}
+
+func isTavilyTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }

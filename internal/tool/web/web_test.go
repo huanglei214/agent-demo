@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -225,6 +226,34 @@ func TestSearchToolRejectsEmptyQuery(t *testing.T) {
 	_, err := NewSearchTool().Execute(context.Background(), mustJSON(t, map[string]any{}))
 	if err == nil || !strings.Contains(err.Error(), "query is required") {
 		t.Fatalf("expected query required error, got %v", err)
+	}
+}
+
+func TestShouldFallbackFromTavilyDoesNotTreatEveryURLErrorAsFallback(t *testing.T) {
+	t.Parallel()
+
+	err := &url.Error{
+		Op:  http.MethodPost,
+		URL: defaultTavilyEndpoint + "/search",
+		Err: errors.New("unsupported protocol scheme"),
+	}
+
+	if shouldFallbackFromTavily(err) {
+		t.Fatalf("expected config-style url error to surface, but fallback was allowed")
+	}
+}
+
+func TestShouldFallbackFromTavilyAllowsTransportFailures(t *testing.T) {
+	t.Parallel()
+
+	err := &url.Error{
+		Op:  http.MethodPost,
+		URL: defaultTavilyEndpoint + "/search",
+		Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
+	}
+
+	if !shouldFallbackFromTavily(err) {
+		t.Fatalf("expected transport failure to allow fallback")
 	}
 }
 

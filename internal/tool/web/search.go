@@ -29,7 +29,7 @@ func NewSearchTool() SearchTool {
 	return SearchTool{
 		client:         &http.Client{Timeout: 15 * time.Second},
 		endpoint:       "https://html.duckduckgo.com/html/",
-		tavilyEndpoint: "https://api.tavily.com",
+		tavilyEndpoint: defaultTavilyEndpoint,
 		apiKey:         strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
 	}
 }
@@ -75,11 +75,14 @@ func (t SearchTool) Execute(ctx context.Context, input json.RawMessage) (tool.Re
 }
 
 func (t SearchTool) executeTavilySearch(ctx context.Context, query string, limit int) (tool.Result, bool, error) {
-	var resp tavilySearchResponse
-	err := doTavilyRequest(ctx, t.client, t.tavilyEndpoint, t.apiKey, "search", tavilySearchRequest{
+	resp, err := tavilyClient{
+		httpClient: t.client,
+		endpoint:   t.tavilyEndpoint,
+		apiKey:     t.apiKey,
+	}.search(ctx, tavilySearchRequest{
 		Query:      query,
 		MaxResults: limit,
-	}, &resp)
+	})
 	if err != nil {
 		return tool.Result{}, false, err
 	}

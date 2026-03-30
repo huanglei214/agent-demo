@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"html"
-	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -112,11 +111,10 @@ func shouldFallbackFromTavily(err error) bool {
 		return true
 	}
 
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return isTavilyTransportError(urlErr.Err)
 	}
 
-	var urlErr *url.Error
-	return errors.As(err, &urlErr)
+	return isTavilyTransportError(err)
 }
