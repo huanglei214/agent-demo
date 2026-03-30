@@ -126,7 +126,7 @@ func TestSearchToolFallsBackToDuckDuckGoWhenTavilyRateLimited(t *testing.T) {
 	tool := NewSearchTool()
 	tool.client = &http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			seen = append(seen, r.URL.String())
+			seen = append(seen, r.Method+" "+r.URL.String())
 			switch r.URL.String() {
 			case "https://api.tavily.com/search":
 				if r.Method != http.MethodPost {
@@ -137,7 +137,6 @@ func TestSearchToolFallsBackToDuckDuckGoWhenTavilyRateLimited(t *testing.T) {
 				}
 				return stringResponse(http.StatusTooManyRequests, `{"error":"rate limited"}`)
 			case "https://html.duckduckgo.com/html/?q=wuhan+weather":
-				t.Fatalf("unexpected DuckDuckGo fallback before Tavily branch: %#v", seen)
 				return stringResponse(http.StatusOK, `<a class="result__a" href="https://example.com/weather">Wuhan Weather</a>`)
 			default:
 				t.Fatalf("unexpected URL: %s", r.URL.String())
@@ -158,13 +157,18 @@ func TestSearchToolFallsBackToDuckDuckGoWhenTavilyRateLimited(t *testing.T) {
 	if len(seen) != 2 {
 		t.Fatalf("expected Tavily then DuckDuckGo requests, got %#v", seen)
 	}
+	if seen[0] != "POST https://api.tavily.com/search" || seen[1] != "GET https://html.duckduckgo.com/html/?q=wuhan+weather" {
+		t.Fatalf("expected Tavily then DuckDuckGo requests, got %#v", seen)
+	}
 }
 
 func TestSearchToolFallsBackToDuckDuckGoWhenTavilyReturnsNoResults(t *testing.T) {
 	t.Setenv("TAVILY_API_KEY", "test-key")
+	var seen []string
 	tool := NewSearchTool()
 	tool.client = &http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			seen = append(seen, r.Method+" "+r.URL.String())
 			if r.URL.String() == "https://api.tavily.com/search" {
 				if r.Method != http.MethodPost {
 					t.Fatalf("expected Tavily POST request, got %s", r.Method)
@@ -173,9 +177,6 @@ func TestSearchToolFallsBackToDuckDuckGoWhenTavilyReturnsNoResults(t *testing.T)
 					t.Fatalf("expected bearer auth, got %q", got)
 				}
 				return stringResponse(http.StatusOK, `{"results":[]}`)
-			}
-			if strings.Contains(r.URL.String(), "duckduckgo.com/html/") {
-				t.Fatalf("unexpected DuckDuckGo fallback before Tavily branch: %s", r.URL.String())
 			}
 			return stringResponse(http.StatusOK, `<a class="result__a" href="https://example.com/weather">Wuhan Weather</a>`)
 		}),
@@ -189,6 +190,12 @@ func TestSearchToolFallsBackToDuckDuckGoWhenTavilyReturnsNoResults(t *testing.T)
 	results := result.Content["results"].([]map[string]any)
 	if len(results) != 1 || results[0]["title"] != "Wuhan Weather" {
 		t.Fatalf("expected fallback search result, got %#v", result.Content)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("expected Tavily then DuckDuckGo requests, got %#v", seen)
+	}
+	if seen[0] != "POST https://api.tavily.com/search" || seen[1] != "GET https://html.duckduckgo.com/html/?q=wuhan+weather" {
+		t.Fatalf("expected Tavily then DuckDuckGo requests, got %#v", seen)
 	}
 }
 
