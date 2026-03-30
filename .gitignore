@@ -36,6 +36,7 @@ go.work.sum
 .gomodcache/
 .tmp/
 web/node_modules/
+web/dist/
 .codex/
 
 # Runtime artifacts
