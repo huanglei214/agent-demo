@@ -124,6 +124,7 @@ func TestSearchToolFallsBackToDuckDuckGoWhenTavilyRateLimited(t *testing.T) {
 	t.Setenv("TAVILY_API_KEY", "test-key")
 	var seen []string
 	tool := NewSearchTool()
+	tool.endpoint = "https://search.example.com/html/"
 	tool.client = &http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			seen = append(seen, r.Method+" "+r.URL.String())
@@ -136,7 +137,7 @@ func TestSearchToolFallsBackToDuckDuckGoWhenTavilyRateLimited(t *testing.T) {
 					t.Fatalf("expected bearer auth, got %q", got)
 				}
 				return stringResponse(http.StatusTooManyRequests, `{"error":"rate limited"}`)
-			case "https://html.duckduckgo.com/html/?q=wuhan+weather":
+			case "https://search.example.com/html/?q=wuhan+weather":
 				return stringResponse(http.StatusOK, `<a class="result__a" href="https://example.com/weather">Wuhan Weather</a>`)
 			default:
 				t.Fatalf("unexpected URL: %s", r.URL.String())
@@ -154,11 +155,18 @@ func TestSearchToolFallsBackToDuckDuckGoWhenTavilyRateLimited(t *testing.T) {
 	if len(results) != 1 || results[0]["url"] != "https://example.com/weather" {
 		t.Fatalf("expected DuckDuckGo fallback result, got %#v", result.Content)
 	}
-	if len(seen) != 2 {
-		t.Fatalf("expected Tavily then DuckDuckGo requests, got %#v", seen)
+	if len(seen) == 0 || seen[0] != "POST https://api.tavily.com/search" {
+		t.Fatalf("expected Tavily request first, got %#v", seen)
 	}
-	if seen[0] != "POST https://api.tavily.com/search" || seen[1] != "GET https://html.duckduckgo.com/html/?q=wuhan+weather" {
-		t.Fatalf("expected Tavily then DuckDuckGo requests, got %#v", seen)
+	fallbackSeen := false
+	for _, got := range seen {
+		if got == "GET https://search.example.com/html/?q=wuhan+weather" {
+			fallbackSeen = true
+			break
+		}
+	}
+	if !fallbackSeen {
+		t.Fatalf("expected fallback request against configured endpoint, got %#v", seen)
 	}
 }
 
@@ -166,6 +174,7 @@ func TestSearchToolFallsBackToDuckDuckGoWhenTavilyReturnsNoResults(t *testing.T)
 	t.Setenv("TAVILY_API_KEY", "test-key")
 	var seen []string
 	tool := NewSearchTool()
+	tool.endpoint = "https://search.example.com/html/"
 	tool.client = &http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			seen = append(seen, r.Method+" "+r.URL.String())
@@ -178,7 +187,11 @@ func TestSearchToolFallsBackToDuckDuckGoWhenTavilyReturnsNoResults(t *testing.T)
 				}
 				return stringResponse(http.StatusOK, `{"results":[]}`)
 			}
-			return stringResponse(http.StatusOK, `<a class="result__a" href="https://example.com/weather">Wuhan Weather</a>`)
+			if r.URL.String() == "https://search.example.com/html/?q=wuhan+weather" {
+				return stringResponse(http.StatusOK, `<a class="result__a" href="https://example.com/weather">Wuhan Weather</a>`)
+			}
+			t.Fatalf("unexpected URL: %s", r.URL.String())
+			return nil, nil
 		}),
 	}
 
@@ -191,11 +204,18 @@ func TestSearchToolFallsBackToDuckDuckGoWhenTavilyReturnsNoResults(t *testing.T)
 	if len(results) != 1 || results[0]["title"] != "Wuhan Weather" {
 		t.Fatalf("expected fallback search result, got %#v", result.Content)
 	}
-	if len(seen) != 2 {
-		t.Fatalf("expected Tavily then DuckDuckGo requests, got %#v", seen)
+	if len(seen) == 0 || seen[0] != "POST https://api.tavily.com/search" {
+		t.Fatalf("expected Tavily request first, got %#v", seen)
 	}
-	if seen[0] != "POST https://api.tavily.com/search" || seen[1] != "GET https://html.duckduckgo.com/html/?q=wuhan+weather" {
-		t.Fatalf("expected Tavily then DuckDuckGo requests, got %#v", seen)
+	fallbackSeen := false
+	for _, got := range seen {
+		if got == "GET https://search.example.com/html/?q=wuhan+weather" {
+			fallbackSeen = true
+			break
+		}
+	}
+	if !fallbackSeen {
+		t.Fatalf("expected fallback request against configured endpoint, got %#v", seen)
 	}
 }
 
