@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -17,8 +18,10 @@ import (
 )
 
 type FetchTool struct {
-	client   *http.Client
-	resolver ipResolver
+	client         *http.Client
+	resolver       ipResolver
+	tavilyEndpoint string
+	apiKey         string
 }
 
 var titlePattern = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
@@ -29,8 +32,10 @@ type ipResolver interface {
 
 func NewFetchTool() FetchTool {
 	return FetchTool{
-		client:   &http.Client{Timeout: 15 * time.Second},
-		resolver: net.DefaultResolver,
+		client:         &http.Client{Timeout: 15 * time.Second},
+		resolver:       net.DefaultResolver,
+		tavilyEndpoint: defaultTavilyEndpoint,
+		apiKey:         strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
 	}
 }
 
@@ -69,6 +74,52 @@ func (t FetchTool) Execute(ctx context.Context, input json.RawMessage) (tool.Res
 		return tool.Result{}, err
 	}
 
+	if strings.TrimSpace(t.apiKey) != "" {
+		result, ok, err := t.executeTavilyFetch(ctx, target)
+		if err == nil && ok {
+			return result, nil
+		}
+		if err != nil && !shouldFallbackFromTavily(err) {
+			return tool.Result{}, err
+		}
+	}
+
+	return t.executeDirectFetch(ctx, target)
+}
+
+func (t FetchTool) executeTavilyFetch(ctx context.Context, target string) (tool.Result, bool, error) {
+	resp, err := tavilyClient{
+		httpClient: t.client,
+		endpoint:   t.tavilyEndpoint,
+		apiKey:     t.apiKey,
+	}.extract(ctx, tavilyExtractRequest{
+		URLs: []string{target},
+	})
+	if err != nil {
+		return tool.Result{}, false, err
+	}
+	if len(resp.Results) == 0 {
+		return tool.Result{}, false, errTavilyNoResults
+	}
+
+	content, truncated := truncateString(strings.TrimSpace(resp.Results[0].RawContent), maxFetchedContentRunes)
+	if content == "" {
+		return tool.Result{}, false, errTavilyNoResults
+	}
+
+	return tool.Result{
+		Content: map[string]any{
+			"url":         target,
+			"final_url":   target,
+			"status_code": http.StatusOK,
+			"title":       "",
+			"content":     content,
+			"truncated":   truncated,
+		},
+	}, true, nil
+}
+
+func (t FetchTool) executeDirectFetch(ctx context.Context, target string) (tool.Result, error) {
 	client := *t.client
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return t.validatePublicURL(req.Context(), req.URL)

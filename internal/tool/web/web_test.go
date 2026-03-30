@@ -360,6 +360,166 @@ func TestFetchToolFallsBackToBodyWhenNoMainOrArticleExists(t *testing.T) {
 	}
 }
 
+func TestFetchToolUsesTavilyWhenAPIKeyIsPresent(t *testing.T) {
+	t.Parallel()
+
+	tool := NewFetchTool()
+	tool.apiKey = "test-key"
+	tool.tavilyEndpoint = "https://api.tavily.example"
+	tool.client = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method != http.MethodPost {
+				t.Fatalf("expected Tavily POST request, got %s", r.Method)
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+				t.Fatalf("expected bearer auth, got %q", got)
+			}
+			if r.URL.String() != "https://api.tavily.example/extract" {
+				t.Fatalf("unexpected Tavily URL: %s", r.URL.String())
+			}
+			return stringResponse(http.StatusOK, `{
+				"results": [
+					{"raw_content": "Today is cloudy and 22C."}
+				]
+			}`)
+		}),
+	}
+	tool.resolver = staticResolver{addresses: []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}}
+
+	result, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"url": "https://example.com/weather",
+	}))
+	if err != nil {
+		t.Fatalf("fetch execute: %v", err)
+	}
+
+	if result.Content["url"] != "https://example.com/weather" {
+		t.Fatalf("expected url to stay at input URL, got %#v", result.Content)
+	}
+	if result.Content["final_url"] != "https://example.com/weather" {
+		t.Fatalf("expected final_url to stay at input URL, got %#v", result.Content)
+	}
+	if result.Content["status_code"] != http.StatusOK {
+		t.Fatalf("expected 200 status for Tavily result, got %#v", result.Content)
+	}
+	if result.Content["content"] != "Today is cloudy and 22C." {
+		t.Fatalf("expected Tavily extracted content, got %#v", result.Content)
+	}
+	if result.Content["truncated"] != false {
+		t.Fatalf("expected untruncated content, got %#v", result.Content)
+	}
+}
+
+func TestFetchToolFallsBackToDirectFetchWhenTavilyRateLimited(t *testing.T) {
+	t.Parallel()
+
+	var seen []string
+	tool := NewFetchTool()
+	tool.apiKey = "test-key"
+	tool.tavilyEndpoint = "https://api.tavily.example"
+	tool.resolver = staticResolver{addresses: []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}}
+	tool.client = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			seen = append(seen, r.Method+" "+r.URL.String())
+			switch r.URL.String() {
+			case "https://api.tavily.example/extract":
+				return stringResponse(http.StatusTooManyRequests, `{"error":"rate limited"}`)
+			case "https://example.com/weather":
+				return stringResponse(http.StatusOK, `
+					<html>
+						<head><title>Wuhan Weather</title></head>
+						<body><main>Today is cloudy and 22C.</main></body>
+					</html>
+				`)
+			default:
+				t.Fatalf("unexpected URL: %s", r.URL.String())
+				return nil, nil
+			}
+		}),
+	}
+
+	result, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"url": "https://example.com/weather",
+	}))
+	if err != nil {
+		t.Fatalf("fetch execute: %v", err)
+	}
+
+	if result.Content["title"] != "Wuhan Weather" {
+		t.Fatalf("expected direct-fetch fallback title, got %#v", result.Content)
+	}
+	if len(seen) == 0 || seen[0] != "POST https://api.tavily.example/extract" {
+		t.Fatalf("expected Tavily request first, got %#v", seen)
+	}
+}
+
+func TestFetchToolFallsBackToDirectFetchWhenTavilyReturnsNoResults(t *testing.T) {
+	t.Parallel()
+
+	var seen []string
+	tool := NewFetchTool()
+	tool.apiKey = "test-key"
+	tool.tavilyEndpoint = "https://api.tavily.example"
+	tool.resolver = staticResolver{addresses: []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}}
+	tool.client = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			seen = append(seen, r.Method+" "+r.URL.String())
+			switch r.URL.String() {
+			case "https://api.tavily.example/extract":
+				return stringResponse(http.StatusOK, `{"results":[]}`)
+			case "https://example.com/weather":
+				return stringResponse(http.StatusOK, `
+					<html>
+						<head><title>Wuhan Weather</title></head>
+						<body><main>Today is cloudy and 22C.</main></body>
+					</html>
+				`)
+			default:
+				t.Fatalf("unexpected URL: %s", r.URL.String())
+				return nil, nil
+			}
+		}),
+	}
+
+	result, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"url": "https://example.com/weather",
+	}))
+	if err != nil {
+		t.Fatalf("fetch execute: %v", err)
+	}
+
+	if result.Content["title"] != "Wuhan Weather" {
+		t.Fatalf("expected direct-fetch fallback title, got %#v", result.Content)
+	}
+	if len(seen) == 0 || seen[0] != "POST https://api.tavily.example/extract" {
+		t.Fatalf("expected Tavily request first, got %#v", seen)
+	}
+}
+
+func TestFetchToolRejectsRestrictedTargetsBeforeCallingTavily(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	tool := NewFetchTool()
+	tool.apiKey = "test-key"
+	tool.client = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			called = true
+			return stringResponse(http.StatusOK, `{}`)
+		}),
+	}
+
+	_, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"url": "http://127.0.0.1:8080/status",
+	}))
+	if err == nil {
+		t.Fatalf("expected restricted address error")
+	}
+	if called {
+		t.Fatalf("expected no outbound call for restricted target")
+	}
+}
+
 func TestFetchToolRejectsRelativeURL(t *testing.T) {
 	t.Parallel()
 

@@ -123,7 +123,7 @@ make verify-scenarios
 工作区配置文件：
 
 - `config.json`：非敏感配置
-- `.env`：敏感配置，当前主要是 `ARK_API_KEY`
+- `.env`：敏感配置，当前主要包括 `ARK_API_KEY` 和可选的 `TAVILY_API_KEY`
 
 推荐做法：
 
@@ -158,7 +158,11 @@ cp .env.example .env
 
 ```bash
 ARK_API_KEY=your_api_key
+TAVILY_API_KEY=your_api_key
 ```
+
+如果配置了 `TAVILY_API_KEY`，`web.search` 和 `web.fetch` 会自动优先使用 Tavily。
+当 Tavily 返回限流、5xx、超时、传输错误或空结果时，系统会自动回退到当前 DuckDuckGo 搜索和直接页面抓取实现。
 
 配置覆盖优先级：
 
@@ -240,7 +244,7 @@ make chat SKILL=weather-lookup PROVIDER=mock
 当前安全边界：
 
 - `bash.exec` 会拦截明显危险命令和命令链
-- `web.fetch` 会拒绝本地和内网地址
+- `web.fetch` 会先拒绝本地和内网地址，再决定是否调用 Tavily 或直接抓取
 - filesystem 工具会在解析 symlink 后继续校验 workspace 边界
 
 查看工具清单：
