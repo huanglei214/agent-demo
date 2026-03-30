@@ -1500,16 +1500,6 @@ type captureRunObserver struct {
 
 func (o *captureRunObserver) OnAnswerStreamEvent(agent.AnswerStreamEvent) {}
 
-type captureObserver struct {
-	runtimeEvents []harnessruntime.Event
-}
-
-func (o *captureObserver) OnRuntimeEvent(event harnessruntime.Event) {
-	o.runtimeEvents = append(o.runtimeEvents, event)
-}
-
-func (o *captureObserver) OnAnswerStreamEvent(agent.AnswerStreamEvent) {}
-
 func (o *captureRunObserver) OnRuntimeEvent(event harnessruntime.Event) {
 	o.events = append(o.events, event)
 }

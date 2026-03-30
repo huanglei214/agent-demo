@@ -69,26 +69,40 @@ func TestValidateActionForRoleAllowsTodoForLeadAgent(t *testing.T) {
 	}
 }
 
-func TestRunObserverAcceptsAnswerStreamEvents(t *testing.T) {
+func TestExecuteRunCapturesAssistantMessageWithoutAnswerStreamEvents(t *testing.T) {
 	t.Parallel()
 
-	observer := &captureAnswerStreamObserver{}
-	ensured := ensureRunObserver(observer)
-	event := AnswerStreamEvent{
-		RunID:     "run_1",
-		SessionID: "session_1",
-		MessageID: "msg_1",
-		Type:      AnswerStreamEventDelta,
-		Delta:     "hello",
-	}
-	ensured.OnAnswerStreamEvent(event)
+	response, observer, services := executeTodoScenarioWithObserver(t, harnessruntime.PlanModeTodo, []model.Action{{Action: "final", Answer: "done"}})
 
-	if len(observer.events) != 1 {
-		t.Fatalf("expected one answer stream event, got %#v", observer.events)
+	if response.Run.Status != harnessruntime.RunCompleted {
+		t.Fatalf("expected completed run, got %#v", response.Run)
 	}
-	if observer.events[0].Type != AnswerStreamEventDelta || observer.events[0].Delta != "hello" {
-		t.Fatalf("unexpected answer stream event, got %#v", observer.events[0])
+	if got := countEventTypeLoop(observer.runtimeEvents, "assistant.message"); got != 1 {
+		t.Fatalf("expected exactly one assistant.message event, got %d in %#v", got, eventTypesLoop(observer.runtimeEvents))
 	}
+	if len(observer.answerStreamEvents) != 0 {
+		t.Fatalf("expected no answer stream events at this stage, got %#v", observer.answerStreamEvents)
+	}
+	state, err := services.StateStore.LoadState(response.Run.ID)
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if state.TurnCount != 1 {
+		t.Fatalf("expected one turn recorded, got %#v", state)
+	}
+}
+
+type captureRunAndStreamObserver struct {
+	runtimeEvents      []harnessruntime.Event
+	answerStreamEvents []AnswerStreamEvent
+}
+
+func (o *captureRunAndStreamObserver) OnRuntimeEvent(event harnessruntime.Event) {
+	o.runtimeEvents = append(o.runtimeEvents, event)
+}
+
+func (o *captureRunAndStreamObserver) OnAnswerStreamEvent(event AnswerStreamEvent) {
+	o.answerStreamEvents = append(o.answerStreamEvents, event)
 }
 
 type captureAnswerStreamObserver struct {
@@ -268,6 +282,67 @@ func executeTodoScenario(t *testing.T, planMode harnessruntime.PlanMode, actions
 	}
 
 	return response, events, testTodoServices{StateStore: stateStore}
+}
+
+func executeTodoScenarioWithObserver(t *testing.T, planMode harnessruntime.PlanMode, actions []model.Action) (ExecutionResponse, *captureRunAndStreamObserver, testTodoServices) {
+	t.Helper()
+
+	workspace := t.TempDir()
+	cfg := config.Load(workspace)
+	paths := store.NewPaths(cfg.Runtime.Root)
+	stateStore := filesystemstore.NewStateStore(paths)
+	eventStore := filesystemstore.NewEventStore(paths)
+	registry := toolruntime.NewRegistry()
+	executor := NewExecutor(
+		cfg,
+		RuntimeServices{Paths: paths, EventStore: eventStore, StateStore: stateStore},
+		ModelServices{ModelFactory: func() (model.Model, error) { return &todoActionSequenceModel{actions: actions}, nil }, PromptBuilder: prompt.NewBuilder()},
+		AgentServices{Planner: planner.New(), ContextManager: harnesscontext.NewManager(), MemoryManager: memory.NewManager(paths)},
+		ToolServices{ToolRegistry: registry, ToolExecutor: toolruntime.NewExecutor(registry)},
+		DelegationServices{DelegationManager: delegation.NewManager(paths), SkillRegistry: skill.NewRegistry(workspace)},
+	)
+
+	now := time.Now().UTC()
+	task := harnessruntime.Task{ID: "task_todo", Instruction: "Inspect the repository", Workspace: workspace, CreatedAt: now}
+	session := harnessruntime.Session{ID: "session_todo", Workspace: workspace, CreatedAt: now, UpdatedAt: now}
+	run := harnessruntime.Run{ID: "run_todo", TaskID: task.ID, SessionID: session.ID, Role: harnessruntime.RunRoleLead, PlanMode: planMode, Status: harnessruntime.RunPending, Provider: "mock", Model: "mock-model", MaxTurns: len(actions) + 1, CreatedAt: now, UpdatedAt: now}
+	plan := harnessruntime.Plan{ID: "plan_todo", RunID: run.ID, Goal: task.Instruction, Version: 1, CreatedAt: now, UpdatedAt: now, Steps: []harnessruntime.PlanStep{{ID: "step_todo", Title: "Inspect repository", Description: task.Instruction, Status: harnessruntime.StepPending}}}
+	state := harnessruntime.RunState{RunID: run.ID, UpdatedAt: now}
+
+	for _, persist := range []func() error{
+		func() error { return stateStore.SaveTask(task) },
+		func() error { return stateStore.SaveSession(session) },
+		func() error { return stateStore.SaveRun(run) },
+		func() error { return stateStore.SavePlan(plan) },
+		func() error { return stateStore.SaveState(state) },
+	} {
+		if err := persist(); err != nil {
+			t.Fatalf("persist scenario: %v", err)
+		}
+	}
+
+	observer := &captureRunAndStreamObserver{}
+	response, err := executor.ExecuteRun(context.Background(), task, session, run, plan, state, true, observer)
+	if planMode == harnessruntime.PlanModeNone {
+		if err == nil {
+			t.Fatal("expected plan_mode=none todo scenario to fail")
+		}
+		if !strings.Contains(err.Error(), "todo") {
+			t.Fatalf("expected todo-related failure, got %v", err)
+		}
+	} else if err != nil {
+		t.Fatalf("execute todo scenario: %v", err)
+	}
+
+	events, err := eventStore.ReadAll(run.ID)
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	if got := countEventTypeLoop(events, "assistant.message"); got != 1 {
+		t.Fatalf("expected exactly one persisted assistant.message, got %d in %#v", got, eventTypesLoop(events))
+	}
+
+	return response, observer, testTodoServices{StateStore: stateStore}
 }
 
 type testTodoServices struct {
