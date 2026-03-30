@@ -23,7 +23,7 @@ func buildRunCommand(ctx *commandContext, use, short string) *cobra.Command {
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			services := ctx.servicesFor(cmd)
-			response, err := services.StartRun(service.RunRequest{
+			response, err := services.StartRun(cmd.Context(), service.RunRequest{
 				Instruction: strings.Join(args, " "),
 				Workspace:   services.Config.Workspace,
 				Provider:    services.Config.Model.Provider,

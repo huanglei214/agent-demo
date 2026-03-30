@@ -12,7 +12,7 @@ func buildResumeCommand(ctx *commandContext, use, short string) *cobra.Command {
 		Short: short,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			response, err := ctx.servicesFor(cmd).ResumeRun(args[0])
+			response, err := ctx.servicesFor(cmd).ResumeRun(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}

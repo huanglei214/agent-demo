@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -8,7 +9,7 @@ import (
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
 )
 
-func (e Executor) ResumeRun(runID string, observer RunObserver) (ExecutionResponse, error) {
+func (e *Executor) ResumeRun(ctx context.Context, runID string, observer RunObserver) (ExecutionResponse, error) {
 	run, err := e.StateStore.LoadRun(runID)
 	if err != nil {
 		return ExecutionResponse{}, err
@@ -45,9 +46,9 @@ func (e Executor) ResumeRun(runID string, observer RunObserver) (ExecutionRespon
 	case harnessruntime.RunBlocked:
 		return ExecutionResponse{}, fmt.Errorf("run %s is blocked and requires manual intervention before resume", runID)
 	case harnessruntime.RunPending:
-		return e.ExecuteRun(task, session, run, plan, state, true, observer)
+		return e.ExecuteRun(ctx, task, session, run, plan, state, true, observer)
 	case harnessruntime.RunRunning:
-		return e.ExecuteRun(task, session, run, plan, state, false, observer)
+		return e.ExecuteRun(ctx, task, session, run, plan, state, false, observer)
 	default:
 		return ExecutionResponse{}, fmt.Errorf("run %s is not resumable from status %s", runID, run.Status)
 	}

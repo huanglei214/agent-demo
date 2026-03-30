@@ -72,7 +72,7 @@ func (s Server) handleStartRun(w http.ResponseWriter, r *http.Request) {
 		maxTurns = 20
 	}
 
-	response, err := s.services.StartRun(service.RunRequest{
+	response, err := s.services.StartRun(r.Context(), service.RunRequest{
 		Instruction: req.Instruction,
 		Workspace:   workspace,
 		Provider:    provider,
@@ -90,7 +90,7 @@ func (s Server) handleStartRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s Server) handleResumeRun(w http.ResponseWriter, r *http.Request) {
-	response, err := s.services.ResumeRun(chi.URLParam(r, "runID"))
+	response, err := s.services.ResumeRun(r.Context(), chi.URLParam(r, "runID"))
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -135,7 +135,7 @@ func (s Server) handleReplayEvents(w http.ResponseWriter, r *http.Request) {
 
 func (s Server) handleRunStream(w http.ResponseWriter, r *http.Request) {
 	runID := chi.URLParam(r, "runID")
-	run, err := s.services.StateStore.LoadRun(runID)
+	run, err := s.services.LoadRun(runID)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -168,7 +168,7 @@ func (s Server) handleRunStream(w http.ResponseWriter, r *http.Request) {
 
 	lastSequence := afterSequence
 	for {
-		events, err := s.services.ReplayRun(runID)
+		events, err := s.services.ReplayRunAfter(runID, lastSequence)
 		if err != nil {
 			_ = writeSSEEvent(w, "error", map[string]any{"message": err.Error()})
 			flusher.Flush()
@@ -179,7 +179,7 @@ func (s Server) handleRunStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		run, err = s.services.StateStore.LoadRun(runID)
+		run, err = s.services.LoadRun(runID)
 		if err != nil {
 			_ = writeSSEEvent(w, "error", map[string]any{"message": err.Error()})
 			flusher.Flush()

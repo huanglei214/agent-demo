@@ -30,6 +30,33 @@ func (s Services) LoadSession(sessionID string) (harnessruntime.Session, error) 
 	return s.StateStore.LoadSession(sessionID)
 }
 
+func (s Services) LoadRun(runID string) (harnessruntime.Run, error) {
+	return s.StateStore.LoadRun(runID)
+}
+
+func (s Services) LoadRunState(runID string) (harnessruntime.Run, harnessruntime.RunState, error) {
+	run, err := s.LoadRun(runID)
+	if err != nil {
+		return harnessruntime.Run{}, harnessruntime.RunState{}, err
+	}
+	state, err := s.StateStore.LoadState(runID)
+	if err != nil {
+		return harnessruntime.Run{}, harnessruntime.RunState{}, err
+	}
+	return run, state, nil
+}
+
+func (s Services) LoadRecentSessionMessages(sessionID string, recentLimit int) ([]harnessruntime.SessionMessage, error) {
+	messages, err := s.StateStore.LoadRecentSessionMessages(sessionID, recentLimit)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []harnessruntime.SessionMessage{}, nil
+		}
+		return nil, err
+	}
+	return ensureSessionMessages(messages), nil
+}
+
 type SessionRunSummary struct {
 	RunID         string                   `json:"run_id"`
 	Status        harnessruntime.RunStatus `json:"status"`

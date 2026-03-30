@@ -1,5 +1,8 @@
 package runtime
 
+// SequenceCursor is intentionally not goroutine-safe.
+// Callers must either serialize access to Next/Reserve or pre-reserve ranges
+// before handing work to concurrent goroutines.
 type SequenceCursor struct {
 	current int64
 }

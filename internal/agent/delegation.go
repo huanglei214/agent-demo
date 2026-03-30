@@ -13,7 +13,7 @@ import (
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
 )
 
-func (e Executor) handleDelegationAction(runCtx context.Context, exec *runExecution, action model.Action) (model.Action, error) {
+func (e *Executor) handleDelegationAction(runCtx context.Context, exec *runExecution, action model.Action) (model.Action, error) {
 	canDelegate, reason := e.DelegationManager.CanDelegate(runCtx, exec.run, *exec.currentStep)
 	if !canDelegate {
 		if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.nextSequence(), "subagent.rejected", "delegation", map[string]any{
@@ -30,7 +30,7 @@ func (e Executor) handleDelegationAction(runCtx context.Context, exec *runExecut
 		delegationGoal = exec.currentStep.Description
 	}
 	delegationTask := e.DelegationManager.BuildTask(exec.run, exec.plan, *exec.currentStep, delegationGoal, exec.recalledMemories, exec.summaries)
-	childResponse, childResult, err := e.spawnChildRun(exec.task, exec.session, exec.run, delegationTask)
+	childResponse, childResult, err := e.spawnChildRun(runCtx, exec.task, exec.session, exec.run, delegationTask)
 	if err != nil {
 		return model.Action{}, e.failOnly(exec, err, exec.nextSequence())
 	}
@@ -139,7 +139,7 @@ func (e Executor) handleDelegationAction(runCtx context.Context, exec *runExecut
 	return followUpAction, nil
 }
 
-func (e Executor) spawnChildRun(parentTask harnessruntime.Task, session harnessruntime.Session, parentRun harnessruntime.Run, task harnessruntime.DelegationTask) (ExecutionResponse, harnessruntime.DelegationResult, error) {
+func (e *Executor) spawnChildRun(runCtx context.Context, parentTask harnessruntime.Task, session harnessruntime.Session, parentRun harnessruntime.Run, task harnessruntime.DelegationTask) (ExecutionResponse, harnessruntime.DelegationResult, error) {
 	if parentRun.Role != harnessruntime.RunRoleLead {
 		return ExecutionResponse{}, harnessruntime.DelegationResult{}, errors.New("only lead-agent can delegate child runs")
 	}
@@ -228,7 +228,7 @@ func (e Executor) spawnChildRun(parentTask harnessruntime.Task, session harnessr
 		return ExecutionResponse{}, harnessruntime.DelegationResult{}, err
 	}
 
-	response, err := e.executeRun(childTask, session, childRun, childPlan, state, true, nil)
+	response, err := e.executeRun(runCtx, childTask, session, childRun, childPlan, state, true, nil)
 	if err != nil {
 		return ExecutionResponse{}, harnessruntime.DelegationResult{}, err
 	}

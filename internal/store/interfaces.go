@@ -5,6 +5,7 @@ import harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
 type EventStore interface {
 	Append(event harnessruntime.Event) error
 	ReadAll(runID string) ([]harnessruntime.Event, error)
+	ReadAfter(runID string, afterSequence int64) ([]harnessruntime.Event, error)
 	NextSequence(runID string) (int64, error)
 }
 

@@ -110,3 +110,37 @@ func TestEventStoreNextSequenceCountsLinesWithoutParsingJSON(t *testing.T) {
 		t.Fatalf("expected next sequence 3, got %d", next)
 	}
 }
+
+func TestEventStoreReadAfterReturnsOnlyNewerEvents(t *testing.T) {
+	t.Parallel()
+
+	paths := store.NewPaths(t.TempDir())
+	eventStore := NewEventStore(paths)
+
+	runID := "run_after"
+	for i := 1; i <= 4; i++ {
+		if err := eventStore.Append(harnessruntime.Event{
+			ID:        harnessruntime.NewID("evt"),
+			RunID:     runID,
+			SessionID: "session_1",
+			TaskID:    "task_1",
+			Sequence:  int64(i),
+			Type:      "runtime.event",
+			Timestamp: time.Now(),
+			Actor:     "runtime",
+		}); err != nil {
+			t.Fatalf("append event %d: %v", i, err)
+		}
+	}
+
+	got, err := eventStore.ReadAfter(runID, 2)
+	if err != nil {
+		t.Fatalf("read events after sequence: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 events after sequence 2, got %#v", got)
+	}
+	if got[0].Sequence != 3 || got[1].Sequence != 4 {
+		t.Fatalf("expected sequences 3 and 4, got %#v", got)
+	}
+}

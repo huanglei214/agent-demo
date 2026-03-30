@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -134,7 +135,7 @@ func writeScenarioSetupFiles(t *testing.T, workspace string, files []scenarioFil
 
 func executeScenarioRun(t *testing.T, services Services, workspace, sessionID, instruction, provider string) RunResponse {
 	t.Helper()
-	response, err := services.StartRun(RunRequest{
+	response, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: instruction,
 		Workspace:   workspace,
 		Provider:    provider,

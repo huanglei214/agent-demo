@@ -31,7 +31,7 @@ func (s Server) handleAGUIChat(w http.ResponseWriter, r *http.Request) {
 	writer.Open()
 
 	service := agui.NewService(s.services)
-	if err := service.StreamChat(req, writer); err != nil {
+	if err := service.StreamChat(r.Context(), req, writer); err != nil {
 		log.Printf(
 			"agui chat failed thread_id=%q provider=%q model=%q workspace=%q error=%v",
 			req.ThreadID,

@@ -20,6 +20,10 @@ func (s Services) ReplayRun(runID string) ([]harnessruntime.Event, error) {
 	return s.EventStore.ReadAll(runID)
 }
 
+func (s Services) ReplayRunAfter(runID string, afterSequence int64) ([]harnessruntime.Event, error) {
+	return s.EventStore.ReadAfter(runID, afterSequence)
+}
+
 func (s Services) ReplayRunSummary(runID string) ([]ReplayEntry, error) {
 	events, err := s.ReplayRun(runID)
 	if err != nil {

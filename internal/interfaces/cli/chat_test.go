@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -288,7 +289,7 @@ func TestChatCommandSupportsSessionHistoryAndHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if _, err := services.StartRun(service.RunRequest{
+	if _, err := services.StartRun(context.Background(), service.RunRequest{
 		Instruction: "你好",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -335,7 +336,7 @@ func TestSessionInspectCommandShowsMessagesAndRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if _, err := services.StartRun(service.RunRequest{
+	if _, err := services.StartRun(context.Background(), service.RunRequest{
 		Instruction: "你好",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -410,7 +411,7 @@ func TestInspectCommandIncludesCurrentStepAndChildRuns(t *testing.T) {
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
 	services := service.NewServices(config.Load(workspace))
-	response, err := services.StartRun(service.RunRequest{
+	response, err := services.StartRun(context.Background(), service.RunRequest{
 		Instruction: "请委派一个子任务来分析这个仓库，然后给我总结",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -448,7 +449,7 @@ func TestReplayCommandReturnsSummariesWhileDebugEventsRemainRaw(t *testing.T) {
 		t.Fatalf("seed README: %v", err)
 	}
 	services := service.NewServices(config.Load(workspace))
-	response, err := services.StartRun(service.RunRequest{
+	response, err := services.StartRun(context.Background(), service.RunRequest{
 		Instruction: "请读取 README.md 并总结当前项目状态",
 		Workspace:   workspace,
 		Provider:    "mock",

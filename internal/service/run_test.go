@@ -30,7 +30,7 @@ func TestStartRunCreatesCompletedArtifactsWithMockProvider(t *testing.T) {
 	cfg := config.Load(workspace)
 	services := NewServices(cfg)
 
-	response, err := services.StartRun(RunRequest{
+	response, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "请读取 README.md 并总结当前项目状态",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -122,6 +122,31 @@ func TestGenerateWithModelTimeoutUsesConfiguredDeadline(t *testing.T) {
 	}
 }
 
+func TestStartRunReturnsContextCanceledWhenRequestContextIsCanceled(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Load(t.TempDir())
+	services := newTestServices(t, cfg, func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return blockingModel{}, nil
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := services.StartRun(ctx, RunRequest{
+		Instruction: "Wait for the request context to cancel",
+		Workspace:   cfg.Workspace,
+		Provider:    "test-provider",
+		Model:       "test-model",
+		MaxTurns:    1,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
 func TestStartRunReusesExistingSession(t *testing.T) {
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
@@ -133,7 +158,7 @@ func TestStartRunReusesExistingSession(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	first, err := services.StartRun(RunRequest{
+	first, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "第一轮问题",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -145,7 +170,7 @@ func TestStartRunReusesExistingSession(t *testing.T) {
 		t.Fatalf("start first session run: %v", err)
 	}
 
-	second, err := services.StartRun(RunRequest{
+	second, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "第二轮追问",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -179,7 +204,7 @@ func TestStartRunRoutesRememberRequestsToMemory(t *testing.T) {
 	cfg := config.Load(workspace)
 	services := NewServices(cfg)
 
-	response, err := services.StartRun(RunRequest{
+	response, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "我是黄磊，请记住",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -207,11 +232,7 @@ func TestStartRunRoutesRememberRequestsToMemory(t *testing.T) {
 	assertEventAbsent(t, events, "tool.called")
 	assertEventAbsent(t, events, "fs.file_created")
 
-	executor, ok := services.Runner.(agent.Executor)
-	if !ok {
-		t.Fatalf("expected runner to be agent.Executor, got %T", services.Runner)
-	}
-	recalled, err := executor.MemoryManager.Recall(memory.RecallQuery{
+	recalled, err := memory.NewManager(store.NewPaths(cfg.Runtime.Root)).Recall(memory.RecallQuery{
 		SessionID: response.Run.SessionID,
 		Goal:      "我是谁",
 		Limit:     5,
@@ -246,7 +267,7 @@ func TestStartRunInterceptsMemoryLikeWriteFileToolInConversationMode(t *testing.
 		}
 	})
 
-	response, err := services.StartRun(RunRequest{
+	response, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "我是黄磊，请记住",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -346,7 +367,7 @@ func TestResumeRunContinuesPendingRun(t *testing.T) {
 		t.Fatalf("save state: %v", err)
 	}
 
-	response, err := services.ResumeRun(run.ID)
+	response, err := services.ResumeRun(context.Background(), run.ID)
 	if err != nil {
 		t.Fatalf("resume run: %v", err)
 	}
@@ -423,7 +444,7 @@ func TestExecuteRunMarksFailedRunAndPlanStepOnModelError(t *testing.T) {
 		UpdatedAt: now,
 	}
 
-	if _, err := services.ExecuteRun(task, session, run, plan, state, true, nil); err == nil {
+	if _, err := services.ExecuteRun(context.Background(), task, session, run, plan, state, true, nil); err == nil {
 		t.Fatal("expected executeRun to fail")
 	}
 
@@ -502,7 +523,7 @@ func TestExecuteRunRecordsStructuredToolFailureDetails(t *testing.T) {
 		t.Fatalf("resave plan: %v", err)
 	}
 
-	if _, err := services.ExecuteRun(task, session, run, plan, state, true, nil); err == nil {
+	if _, err := services.ExecuteRun(context.Background(), task, session, run, plan, state, true, nil); err == nil {
 		t.Fatal("expected timeout run to fail")
 	}
 
@@ -543,7 +564,7 @@ func TestStartRunStreamObserverReceivesLifecycleEvents(t *testing.T) {
 	services := NewServices(cfg)
 	observer := &captureRunObserver{}
 
-	response, err := services.StartRunStream(RunRequest{
+	response, err := services.StartRunStream(context.Background(), RunRequest{
 		Instruction: "Summarize the repository in one short paragraph",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -606,7 +627,7 @@ func TestStartRunAllowsFollowUpToolCallBeforeFinalAnswer(t *testing.T) {
 		}
 	})
 
-	response, err := services.StartRun(RunRequest{
+	response, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "武汉天气怎么样",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -649,7 +670,7 @@ func TestStartRunActivatesExplicitSkillAndNarrowsPromptTools(t *testing.T) {
 		}
 	})
 
-	response, err := services.StartRun(RunRequest{
+	response, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "请帮我查武汉天气",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -697,7 +718,7 @@ func TestStartRunAutoMatchesWeatherSkill(t *testing.T) {
 		}
 	})
 
-	response, err := services.StartRun(RunRequest{
+	response, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "武汉天气怎么样",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -740,7 +761,7 @@ func TestStartRunRejectsToolOutsideActiveSkillAllowlist(t *testing.T) {
 		}
 	})
 
-	_, err := services.StartRun(RunRequest{
+	_, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "查一下武汉天气",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -793,7 +814,7 @@ func TestStartRunForcesFinalAfterRepeatedWebRetrieval(t *testing.T) {
 	}
 	services := NewServicesFromParts(cfg, runtimeServices, modelServices, agentServices, toolServices, delegationServices)
 
-	response, err := services.StartRun(RunRequest{
+	response, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "武汉天气怎么样",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -861,7 +882,7 @@ func TestStartRunFailsWhenForcedFinalStillRequestsTools(t *testing.T) {
 	}
 	services := NewServicesFromParts(cfg, runtimeServices, modelServices, agentServices, toolServices, delegationServices)
 
-	_, err := services.StartRun(RunRequest{
+	_, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "武汉天气怎么样",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -887,7 +908,7 @@ func TestStartRunExecutesBatchedToolCallsInOrder(t *testing.T) {
 		}
 	})
 
-	response, err := services.StartRun(RunRequest{
+	response, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "先写文件再读取确认内容",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -929,7 +950,7 @@ func TestStartRunExecutesReadOnlyToolBatchInParallel(t *testing.T) {
 		}
 	})
 
-	response, err := services.StartRun(RunRequest{
+	response, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "查一下武汉天气",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -989,7 +1010,7 @@ func TestResumeRunContinuesAfterInterruptedModelCall(t *testing.T) {
 	_ = task
 	_ = session
 
-	response, err := services.ResumeRun(run.ID)
+	response, err := services.ResumeRun(context.Background(), run.ID)
 	if err != nil {
 		t.Fatalf("resume running run: %v", err)
 	}
@@ -1014,7 +1035,7 @@ func TestResumeRunRejectsBlockedRun(t *testing.T) {
 
 	_, _, run, _, _ := seedStoredRun(t, services, workspace, time.Now(), harnessruntime.RunBlocked, "run_blocked")
 
-	if _, err := services.ResumeRun(run.ID); err == nil {
+	if _, err := services.ResumeRun(context.Background(), run.ID); err == nil {
 		t.Fatal("expected blocked run to be non-resumable")
 	} else if !strings.Contains(err.Error(), "manual intervention") {
 		t.Fatalf("unexpected blocked resume error: %v", err)
@@ -1082,7 +1103,7 @@ func TestResumeRunContinuesAfterToolExecutionWithoutReplayingTool(t *testing.T) 
 		}
 	}
 
-	response, err := services.ResumeRun(run.ID)
+	response, err := services.ResumeRun(context.Background(), run.ID)
 	if err != nil {
 		t.Fatalf("resume post-tool run: %v", err)
 	}
@@ -1125,7 +1146,7 @@ func TestResumeRunRejectsRunWithPersistedResult(t *testing.T) {
 		t.Fatalf("save result: %v", err)
 	}
 
-	if _, err := services.ResumeRun(run.ID); err == nil {
+	if _, err := services.ResumeRun(context.Background(), run.ID); err == nil {
 		t.Fatal("expected run with persisted result to be non-resumable")
 	} else if !strings.Contains(err.Error(), "persisted result") {
 		t.Fatalf("unexpected persisted result error: %v", err)
@@ -1229,6 +1250,12 @@ func (m *inspectingModel) Generate(ctx context.Context, req model.Request) (mode
 
 type failingModel struct {
 	err error
+}
+
+func (blockingModel) Generate(ctx context.Context, req model.Request) (model.Response, error) {
+	_ = req
+	<-ctx.Done()
+	return model.Response{}, ctx.Err()
 }
 
 func (m failingModel) Generate(ctx context.Context, req model.Request) (model.Response, error) {
@@ -1389,6 +1416,8 @@ type actionSequenceModel struct {
 type deadlineCapturingModel struct {
 	deadline time.Time
 }
+
+type blockingModel struct{}
 
 type batchWriteReadModel struct {
 	index int

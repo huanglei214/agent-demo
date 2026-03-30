@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -60,7 +61,7 @@ func TestListEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := services.StartRun(service.RunRequest{
+	if _, err := services.StartRun(context.Background(), service.RunRequest{
 		Instruction: "Summarize the repository",
 		Workspace:   services.Config.Workspace,
 		Provider:    "mock",
@@ -70,7 +71,7 @@ func TestListEndpoints(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := services.StartRun(service.RunRequest{
+	if _, err := services.StartRun(context.Background(), service.RunRequest{
 		Instruction: "Check runtime files",
 		Workspace:   services.Config.Workspace,
 		Provider:    "mock",

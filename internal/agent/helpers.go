@@ -15,7 +15,7 @@ import (
 	toolruntime "github.com/huanglei214/agent-demo/internal/tool"
 )
 
-func (e Executor) appendModelCall(run harnessruntime.Run, sequence int64, phase, toolName string, req model.Request, resp *model.Response, callErr error) error {
+func (e *Executor) appendModelCall(run harnessruntime.Run, sequence int64, phase, toolName string, req model.Request, resp *model.Response, callErr error) error {
 	call := harnessruntime.ModelCall{
 		ID:       harnessruntime.NewID("modelcall"),
 		RunID:    run.ID,
@@ -48,7 +48,7 @@ func (e Executor) appendModelCall(run harnessruntime.Run, sequence int64, phase,
 	return e.StateStore.AppendModelCall(call)
 }
 
-func (e Executor) promptToolMetadataForSkill(activeSkill *skill.Definition) []map[string]string {
+func (e *Executor) promptToolMetadataForSkill(activeSkill *skill.Definition) []map[string]string {
 	descriptors := e.toolDescriptorsForNames(allowedToolSet(activeSkill))
 	result := make([]map[string]string, 0, len(descriptors))
 	for _, item := range descriptors {
@@ -61,7 +61,7 @@ func (e Executor) promptToolMetadataForSkill(activeSkill *skill.Definition) []ma
 	return result
 }
 
-func (e Executor) activeSkillForTask(task harnessruntime.Task) (*skill.Definition, error) {
+func (e *Executor) activeSkillForTask(task harnessruntime.Task) (*skill.Definition, error) {
 	if task.Metadata == nil {
 		return nil, nil
 	}
@@ -105,7 +105,7 @@ func ensureSkillAllowsTool(activeSkill *skill.Definition, toolName string) error
 	return fmt.Errorf("tool %s is not allowed by active skill %s", toolName, activeSkill.Name)
 }
 
-func (e Executor) appendEvent(event harnessruntime.Event, observer RunObserver) error {
+func (e *Executor) appendEvent(event harnessruntime.Event, observer RunObserver) error {
 	if err := e.EventStore.Append(event); err != nil {
 		return err
 	}
@@ -113,7 +113,7 @@ func (e Executor) appendEvent(event harnessruntime.Event, observer RunObserver) 
 	return nil
 }
 
-func (e Executor) appendEvents(events []harnessruntime.Event, observer RunObserver) error {
+func (e *Executor) appendEvents(events []harnessruntime.Event, observer RunObserver) error {
 	for _, event := range events {
 		if err := e.appendEvent(event, observer); err != nil {
 			return err
@@ -122,7 +122,7 @@ func (e Executor) appendEvents(events []harnessruntime.Event, observer RunObserv
 	return nil
 }
 
-func (e Executor) newEvent(run harnessruntime.Run, taskID, sessionID string, sequence int64, eventType, actor string, payload map[string]any) harnessruntime.Event {
+func (e *Executor) newEvent(run harnessruntime.Run, taskID, sessionID string, sequence int64, eventType, actor string, payload map[string]any) harnessruntime.Event {
 	return harnessruntime.Event{
 		ID:        harnessruntime.NewID("evt"),
 		RunID:     run.ID,
@@ -136,7 +136,7 @@ func (e Executor) newEvent(run harnessruntime.Run, taskID, sessionID string, seq
 	}
 }
 
-func (e Executor) failRun(run harnessruntime.Run, plan harnessruntime.Plan, taskID, sessionID string, state harnessruntime.RunState, cause error, sequence int64, observer RunObserver) (ExecutionResponse, error) {
+func (e *Executor) failRun(run harnessruntime.Run, plan harnessruntime.Plan, taskID, sessionID string, state harnessruntime.RunState, cause error, sequence int64, observer RunObserver) (ExecutionResponse, error) {
 	now := time.Now()
 	previousStatus := run.Status
 	run.Status = harnessruntime.RunFailed
@@ -231,7 +231,7 @@ func firstNonEmptyString(values ...any) string {
 	return ""
 }
 
-func (e Executor) generateWithModelTimeout(parent context.Context, provider model.Model, req model.Request) (model.Response, error) {
+func (e *Executor) generateWithModelTimeout(parent context.Context, provider model.Model, req model.Request) (model.Response, error) {
 	timeoutSeconds := e.Config.Model.TimeoutSeconds
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 90
@@ -241,7 +241,7 @@ func (e Executor) generateWithModelTimeout(parent context.Context, provider mode
 	return provider.Generate(callCtx, req)
 }
 
-func (e Executor) GenerateWithModelTimeout(parent context.Context, provider model.Model, req model.Request) (model.Response, error) {
+func (e *Executor) GenerateWithModelTimeout(parent context.Context, provider model.Model, req model.Request) (model.Response, error) {
 	return e.generateWithModelTimeout(parent, provider, req)
 }
 
@@ -252,7 +252,7 @@ func responsePtr(resp model.Response, err error) *model.Response {
 	return &resp
 }
 
-func (e Executor) toolDescriptorsForNames(allowed map[string]struct{}) []toolDescriptor {
+func (e *Executor) toolDescriptorsForNames(allowed map[string]struct{}) []toolDescriptor {
 	descriptors := e.ToolRegistry.Descriptors()
 	sort.Slice(descriptors, func(i, j int) bool {
 		return descriptors[i].Name < descriptors[j].Name
@@ -274,7 +274,7 @@ func (e Executor) toolDescriptorsForNames(allowed map[string]struct{}) []toolDes
 	return result
 }
 
-func (e Executor) availableToolSet() map[string]struct{} {
+func (e *Executor) availableToolSet() map[string]struct{} {
 	descriptors := e.ToolRegistry.Descriptors()
 	result := make(map[string]struct{}, len(descriptors))
 	for _, item := range descriptors {

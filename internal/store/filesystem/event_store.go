@@ -45,6 +45,16 @@ func (s EventStore) Append(event harnessruntime.Event) error {
 }
 
 func (s EventStore) ReadAll(runID string) ([]harnessruntime.Event, error) {
+	return s.readFiltered(runID, func(harnessruntime.Event) bool { return true })
+}
+
+func (s EventStore) ReadAfter(runID string, afterSequence int64) ([]harnessruntime.Event, error) {
+	return s.readFiltered(runID, func(event harnessruntime.Event) bool {
+		return event.Sequence > afterSequence
+	})
+}
+
+func (s EventStore) readFiltered(runID string, include func(harnessruntime.Event) bool) ([]harnessruntime.Event, error) {
 	path := s.paths.EventsPath(runID)
 	file, err := os.Open(path)
 	if err != nil {
@@ -59,7 +69,9 @@ func (s EventStore) ReadAll(runID string) ([]harnessruntime.Event, error) {
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
 			return nil, err
 		}
-		events = append(events, event)
+		if include(event) {
+			events = append(events, event)
+		}
 	}
 
 	return events, scanner.Err()

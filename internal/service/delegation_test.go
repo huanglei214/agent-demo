@@ -24,7 +24,7 @@ func TestStartRunWithDelegationCreatesChildRunArtifacts(t *testing.T) {
 	}
 
 	services := newTestServices(t, config.Load(workspace), configureDelegationWithoutReplan(t))
-	response, err := services.StartRun(RunRequest{
+	response, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "请委派一个子任务来分析这个仓库，然后给我总结",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -115,7 +115,7 @@ func TestStartRunWithDelegationCanTriggerReplan(t *testing.T) {
 	}
 
 	services := NewServices(config.Load(workspace))
-	response, err := services.StartRun(RunRequest{
+	response, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "请委派一个子任务来分析这个仓库，并在需要重新规划时告诉我",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -141,7 +141,7 @@ func TestStartRunWithDelegationSkipsReplanWithoutSignal(t *testing.T) {
 	}
 
 	services := newTestServices(t, config.Load(workspace), configureDelegationWithoutReplan(t))
-	response, err := services.StartRun(RunRequest{
+	response, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "请委派一个子任务来分析这个仓库，然后给我总结",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -277,7 +277,7 @@ func TestStartRunWithDelegationRejectsUnstructuredChildResult(t *testing.T) {
 		}
 	})
 
-	_, err := services.StartRun(RunRequest{
+	_, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "请委派一个子任务来分析这个仓库，然后给我总结",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -331,7 +331,7 @@ func TestStartRunWithDelegationRejectsNestedDelegationFromChild(t *testing.T) {
 		}
 	})
 
-	_, err := services.StartRun(RunRequest{
+	_, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "请委派一个子任务来分析这个仓库，然后给我总结",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -352,7 +352,7 @@ func TestStartRunDoesNotInjectConversationHistoryIntoPrompt(t *testing.T) {
 
 	services := NewServices(config.Load(workspace))
 
-	firstRun, err := services.StartRun(RunRequest{
+	firstRun, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "第一轮问题",
 		Workspace:   workspace,
 		Provider:    "mock",
@@ -363,7 +363,7 @@ func TestStartRunDoesNotInjectConversationHistoryIntoPrompt(t *testing.T) {
 		t.Fatalf("start first run: %v", err)
 	}
 
-	secondRun, err := services.StartRun(RunRequest{
+	secondRun, err := services.StartRun(context.Background(), RunRequest{
 		Instruction: "第二轮问题",
 		Workspace:   workspace,
 		Provider:    "mock",

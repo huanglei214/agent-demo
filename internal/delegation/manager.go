@@ -26,6 +26,8 @@ type Manager struct {
 	policy Policy
 }
 
+const maxDepthWalk = 32
+
 type ChildRecord struct {
 	Task      harnessruntime.DelegationTask   `json:"task"`
 	Run       harnessruntime.Run              `json:"run"`
@@ -82,15 +84,15 @@ func (m Manager) BuildTask(parentRun harnessruntime.Run, plan harnessruntime.Pla
 	_ = memories
 	_ = summaries
 	return harnessruntime.DelegationTask{
-		ID:            harnessruntime.NewID("delegation"),
-		ParentRunID:   parentRun.ID,
-		SessionID:     parentRun.SessionID,
-		PlanStepID:    step.ID,
-		Role:          harnessruntime.RunRoleSubagent,
-		Goal:          strings.TrimSpace(goal),
-		AllowedTools:  append([]string{}, m.policy.AllowedTools...),
-		StepTitle:     step.Title,
-		StepDesc:      step.Description,
+		ID:           harnessruntime.NewID("delegation"),
+		ParentRunID:  parentRun.ID,
+		SessionID:    parentRun.SessionID,
+		PlanStepID:   step.ID,
+		Role:         harnessruntime.RunRoleSubagent,
+		Goal:         strings.TrimSpace(goal),
+		AllowedTools: append([]string{}, m.policy.AllowedTools...),
+		StepTitle:    step.Title,
+		StepDesc:     step.Description,
 		Constraints: []string{
 			"child run must operate as a constrained subagent",
 			"child run must return a structured result object with summary, artifacts, findings, risks, recommendations, and needs_replan",
@@ -177,7 +179,17 @@ func (m Manager) activeChildren(parentRunID string) (int, error) {
 func (m Manager) depth(run harnessruntime.Run) (int, error) {
 	depth := 0
 	current := run
+	seen := map[string]struct{}{}
+	if current.ID != "" {
+		seen[current.ID] = struct{}{}
+	}
 	for current.ParentRunID != "" {
+		if depth >= maxDepthWalk {
+			return depth, nil
+		}
+		if _, ok := seen[current.ParentRunID]; ok {
+			return depth + 1, nil
+		}
 		parent, err := m.loadRun(current.ParentRunID)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -187,6 +199,9 @@ func (m Manager) depth(run harnessruntime.Run) (int, error) {
 		}
 		depth++
 		current = parent
+		if current.ID != "" {
+			seen[current.ID] = struct{}{}
+		}
 	}
 	return depth, nil
 }

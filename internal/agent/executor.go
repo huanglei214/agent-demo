@@ -65,8 +65,8 @@ func NewExecutor(
 	agentServices AgentServices,
 	toolServices ToolServices,
 	delegationServices DelegationServices,
-) Executor {
-	return Executor{
+) *Executor {
+	return &Executor{
 		Config:             cfg,
 		RuntimeServices:    runtime,
 		ModelServices:      modelServices,
@@ -76,7 +76,8 @@ func NewExecutor(
 	}
 }
 
-func (e Executor) executeRun(
+func (e *Executor) executeRun(
+	ctx context.Context,
 	task harnessruntime.Task,
 	session harnessruntime.Session,
 	run harnessruntime.Run,
@@ -85,10 +86,10 @@ func (e Executor) executeRun(
 	appendUserMessage bool,
 	observer RunObserver,
 ) (ExecutionResponse, error) {
-	return e.ExecuteRun(task, session, run, plan, state, appendUserMessage, observer)
+	return e.ExecuteRun(ctx, task, session, run, plan, state, appendUserMessage, observer)
 }
 
-func (e Executor) HandleDelegationAction(
+func (e *Executor) HandleDelegationAction(
 	ctx context.Context,
 	exec *runExecution,
 	action model.Action,

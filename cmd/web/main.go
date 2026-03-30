@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -82,10 +85,31 @@ func runServer(cmd *cobra.Command, opts commandOptions) error {
 	}
 
 	log.Printf("serving local harness API on http://%s", server.Addr)
+	if err := serveServer(server, shutdownSignals()); err != nil {
+		return err
+	}
+	return nil
+}
+
+func serveServer(server *http.Server, signals <-chan os.Signal) error {
+	if signals != nil {
+		go func() {
+			<-signals
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = server.Shutdown(ctx)
+		}()
+	}
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
 	return nil
+}
+
+func shutdownSignals() <-chan os.Signal {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	return signals
 }
 
 func changedStringFlag(cmd *cobra.Command, name, value string) string {

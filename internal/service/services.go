@@ -32,6 +32,7 @@ type Services struct {
 	DelegationManager delegation.Manager
 	SkillRegistry     skill.Registry
 	ToolRegistry      *toolruntime.Registry
+	ModelCaller       agent.ModelCaller
 	Runner            agent.Runner
 }
 
@@ -66,6 +67,7 @@ func NewServicesFromParts(
 		DelegationManager: delegationServices.DelegationManager,
 		SkillRegistry:     delegationServices.SkillRegistry,
 		ToolRegistry:      toolServices.ToolRegistry,
+		ModelCaller:       executor,
 		Runner:            executor,
 	}
 }

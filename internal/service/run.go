@@ -27,23 +27,26 @@ type RunRequest struct {
 type RunResponse = agent.ExecutionResponse
 type RunObserver = agent.RunObserver
 
-func (s Services) StartRun(req RunRequest) (RunResponse, error) {
-	return s.startRun(req, nil)
+func (s Services) StartRun(ctx context.Context, req RunRequest) (RunResponse, error) {
+	return s.startRun(ctx, req, nil)
 }
 
-func (s Services) StartRunStream(req RunRequest, observer RunObserver) (RunResponse, error) {
-	return s.startRun(req, observer)
+func (s Services) StartRunStream(ctx context.Context, req RunRequest, observer RunObserver) (RunResponse, error) {
+	return s.startRun(ctx, req, observer)
 }
 
-func (s Services) ExecuteRun(task harnessruntime.Task, session harnessruntime.Session, run harnessruntime.Run, plan harnessruntime.Plan, state harnessruntime.RunState, activate bool, observer RunObserver) (RunResponse, error) {
+func (s Services) ExecuteRun(ctx context.Context, task harnessruntime.Task, session harnessruntime.Session, run harnessruntime.Run, plan harnessruntime.Plan, state harnessruntime.RunState, activate bool, observer RunObserver) (RunResponse, error) {
 	runner, err := s.runner()
 	if err != nil {
 		return RunResponse{}, err
 	}
-	return runner.ExecuteRun(task, session, run, plan, state, activate, observer)
+	return runner.ExecuteRun(ctx, task, session, run, plan, state, activate, observer)
 }
 
-func (s Services) startRun(req RunRequest, observer RunObserver) (RunResponse, error) {
+func (s Services) startRun(ctx context.Context, req RunRequest, observer RunObserver) (RunResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	now := time.Now()
 
 	task := harnessruntime.Task{
@@ -102,7 +105,7 @@ func (s Services) startRun(req RunRequest, observer RunObserver) (RunResponse, e
 		UpdatedAt: now,
 	}
 
-	plan, err := s.Planner.CreatePlan(context.Background(), planner.PlanInput{
+	plan, err := s.Planner.CreatePlan(ctx, planner.PlanInput{
 		RunID:     run.ID,
 		Goal:      req.Instruction,
 		Workspace: req.Workspace,
@@ -188,7 +191,7 @@ func (s Services) startRun(req RunRequest, observer RunObserver) (RunResponse, e
 	if err != nil {
 		return RunResponse{}, err
 	}
-	return runner.ExecuteRun(task, session, run, plan, state, true, observer)
+	return runner.ExecuteRun(ctx, task, session, run, plan, state, true, observer)
 }
 
 func (s Services) resolveActiveSkill(req RunRequest) (*skill.Definition, error) {

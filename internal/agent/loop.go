@@ -50,8 +50,11 @@ func (e *runExecution) currentSequence() int64 {
 	return e.sequence.Current()
 }
 
-func (e Executor) ExecuteRun(task harnessruntime.Task, session harnessruntime.Session, run harnessruntime.Run, plan harnessruntime.Plan, state harnessruntime.RunState, activate bool, observer RunObserver) (ExecutionResponse, error) {
+func (e *Executor) ExecuteRun(ctx context.Context, task harnessruntime.Task, session harnessruntime.Session, run harnessruntime.Run, plan harnessruntime.Plan, state harnessruntime.RunState, activate bool, observer RunObserver) (ExecutionResponse, error) {
 	observer = ensureRunObserver(observer)
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if len(plan.Steps) == 0 {
 		return ExecutionResponse{}, errors.New("plan has no steps to execute")
 	}
@@ -102,7 +105,7 @@ func (e Executor) ExecuteRun(task harnessruntime.Task, session harnessruntime.Se
 	}
 	exec.provider = provider
 
-	runCtx := context.Background()
+	runCtx := ctx
 	action, err := e.resolveInitialAction(runCtx, exec, activate)
 	if err != nil {
 		return ExecutionResponse{}, err
@@ -130,7 +133,7 @@ func (e Executor) ExecuteRun(task harnessruntime.Task, session harnessruntime.Se
 	return e.completeRun(exec)
 }
 
-func (e Executor) activateRun(exec *runExecution) error {
+func (e *Executor) activateRun(exec *runExecution) error {
 	exec.run.Status = harnessruntime.RunRunning
 	exec.run.CurrentStepID = exec.currentStep.ID
 	exec.run.UpdatedAt = time.Now()
@@ -161,7 +164,7 @@ func (e Executor) activateRun(exec *runExecution) error {
 	return nil
 }
 
-func (e Executor) loadExecutionContext(exec *runExecution) error {
+func (e *Executor) loadExecutionContext(exec *runExecution) error {
 	recentEvents, err := e.EventStore.ReadAll(exec.run.ID)
 	if err != nil {
 		return err
@@ -195,7 +198,7 @@ func (e Executor) loadExecutionContext(exec *runExecution) error {
 	})
 }
 
-func (e Executor) resolveInitialAction(runCtx context.Context, exec *runExecution, activate bool) (model.Action, error) {
+func (e *Executor) resolveInitialAction(runCtx context.Context, exec *runExecution, activate bool) (model.Action, error) {
 	recentMessages := []harnessruntime.SessionMessage{}
 	recentEvents, err := e.EventStore.ReadAll(exec.run.ID)
 	if err != nil {
@@ -287,7 +290,7 @@ func (e Executor) resolveInitialAction(runCtx context.Context, exec *runExecutio
 	return action, nil
 }
 
-func (e Executor) completeRun(exec *runExecution) (ExecutionResponse, error) {
+func (e *Executor) completeRun(exec *runExecution) (ExecutionResponse, error) {
 	result := harnessruntime.RunResult{
 		RunID:       exec.run.ID,
 		Status:      harnessruntime.RunCompleted,
@@ -397,7 +400,7 @@ func (e Executor) completeRun(exec *runExecution) (ExecutionResponse, error) {
 	}, nil
 }
 
-func (e Executor) failOnly(exec *runExecution, err error, sequence int64) error {
+func (e *Executor) failOnly(exec *runExecution, err error, sequence int64) error {
 	_, failErr := e.failRun(exec.run, exec.plan, exec.task.ID, exec.session.ID, exec.state, err, sequence, exec.observer)
 	return failErr
 }

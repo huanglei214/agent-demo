@@ -17,7 +17,7 @@ import (
 	toolruntime "github.com/huanglei214/agent-demo/internal/tool"
 )
 
-func (e Executor) resumePostToolAction(runCtx context.Context, exec *runExecution) (model.Action, error) {
+func (e *Executor) resumePostToolAction(runCtx context.Context, exec *runExecution) (model.Action, error) {
 	pendingToolResults := pendingToolResultsFromState(exec.state)
 	followUpPrompt := e.PromptBuilder.BuildFollowUpPrompt(exec.run.Role, exec.task, pendingToolResults, exec.workingEvidence, e.promptToolMetadataForSkill(exec.activeSkill), exec.activeSkill)
 	modelSequence := exec.nextSequence()
@@ -71,7 +71,7 @@ func (e Executor) resumePostToolAction(runCtx context.Context, exec *runExecutio
 	return followUpAction, nil
 }
 
-func (e Executor) dispatchToolActions(runCtx context.Context, exec *runExecution, action model.Action) (model.Action, error) {
+func (e *Executor) dispatchToolActions(runCtx context.Context, exec *runExecution, action model.Action) (model.Action, error) {
 	for action.Action == "tool" {
 		calls, err := toolCallsFromAction(action)
 		if err != nil {
@@ -139,7 +139,7 @@ func (e Executor) dispatchToolActions(runCtx context.Context, exec *runExecution
 	return action, nil
 }
 
-func (e Executor) validateToolCalls(exec *runExecution, calls []model.ToolCall) error {
+func (e *Executor) validateToolCalls(exec *runExecution, calls []model.ToolCall) error {
 	for _, call := range calls {
 		if err := ensureSkillAllowsTool(exec.activeSkill, call.Tool); err != nil {
 			return e.failOnly(exec, err, exec.nextSequence())
@@ -158,7 +158,7 @@ func (e Executor) validateToolCalls(exec *runExecution, calls []model.ToolCall) 
 	return nil
 }
 
-func (e Executor) runToolBatch(runCtx context.Context, exec *runExecution, calls []model.ToolCall) ([]harnessruntime.ToolCallResult, error) {
+func (e *Executor) runToolBatch(runCtx context.Context, exec *runExecution, calls []model.ToolCall) ([]harnessruntime.ToolCallResult, error) {
 	toolCallIDs := make([]string, len(calls))
 	for i := range calls {
 		toolCallIDs[i] = harnessruntime.NewID("toolcall")
@@ -245,7 +245,7 @@ func (e Executor) runToolBatch(runCtx context.Context, exec *runExecution, calls
 	return toolResults, nil
 }
 
-func (e Executor) maybeCompactContext(exec *runExecution, recentEvents []harnessruntime.Event, toolResults []harnessruntime.ToolCallResult) error {
+func (e *Executor) maybeCompactContext(exec *runExecution, recentEvents []harnessruntime.Event, toolResults []harnessruntime.ToolCallResult) error {
 	shouldCompact, reason := e.ContextManager.ShouldCompact(harnesscontext.CompactionCheckInput{
 		TokenUsage:       exec.lastPromptBytes,
 		TokenBudget:      1600,
@@ -280,7 +280,7 @@ func (e Executor) maybeCompactContext(exec *runExecution, recentEvents []harness
 	return nil
 }
 
-func (e Executor) followUpAfterTools(runCtx context.Context, exec *runExecution, calls []model.ToolCall, toolResults []harnessruntime.ToolCallResult) (model.Action, error) {
+func (e *Executor) followUpAfterTools(runCtx context.Context, exec *runExecution, calls []model.ToolCall, toolResults []harnessruntime.ToolCallResult) (model.Action, error) {
 	followUpPrompt := e.PromptBuilder.BuildFollowUpPrompt(exec.run.Role, exec.task, toolResults, exec.workingEvidence, e.promptToolMetadataForSkill(exec.activeSkill), exec.activeSkill)
 	modelSequence := exec.nextSequence()
 	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, modelSequence, "model.called", "runtime", map[string]any{
@@ -330,7 +330,7 @@ func (e Executor) followUpAfterTools(runCtx context.Context, exec *runExecution,
 	return followUpAction, nil
 }
 
-func (e Executor) forceFinalFromRetrieval(runCtx context.Context, exec *runExecution, calls []model.ToolCall, reason string) (model.Action, error) {
+func (e *Executor) forceFinalFromRetrieval(runCtx context.Context, exec *runExecution, calls []model.ToolCall, reason string) (model.Action, error) {
 	forcedPrompt := e.PromptBuilder.BuildForcedFinalPrompt(
 		exec.run.Role,
 		exec.task,
@@ -507,14 +507,14 @@ type toolExecutionError struct {
 	Err   error
 }
 
-func (e Executor) executeToolCalls(ctx context.Context, toolCallIDs []string, calls []model.ToolCall) ([]harnessruntime.ToolCallResult, []toolExecutionError) {
+func (e *Executor) executeToolCalls(ctx context.Context, toolCallIDs []string, calls []model.ToolCall) ([]harnessruntime.ToolCallResult, []toolExecutionError) {
 	if e.canExecuteToolBatchInParallel(calls) {
 		return e.executeToolCallsParallel(ctx, toolCallIDs, calls)
 	}
 	return e.executeToolCallsSerial(ctx, toolCallIDs, calls)
 }
 
-func (e Executor) executeToolCallsSerial(ctx context.Context, toolCallIDs []string, calls []model.ToolCall) ([]harnessruntime.ToolCallResult, []toolExecutionError) {
+func (e *Executor) executeToolCallsSerial(ctx context.Context, toolCallIDs []string, calls []model.ToolCall) ([]harnessruntime.ToolCallResult, []toolExecutionError) {
 	results := make([]harnessruntime.ToolCallResult, len(calls))
 	failures := make([]toolExecutionError, 0)
 	for i, call := range calls {
@@ -533,7 +533,7 @@ func (e Executor) executeToolCallsSerial(ctx context.Context, toolCallIDs []stri
 	return results, failures
 }
 
-func (e Executor) executeToolCallsParallel(ctx context.Context, toolCallIDs []string, calls []model.ToolCall) ([]harnessruntime.ToolCallResult, []toolExecutionError) {
+func (e *Executor) executeToolCallsParallel(ctx context.Context, toolCallIDs []string, calls []model.ToolCall) ([]harnessruntime.ToolCallResult, []toolExecutionError) {
 	results := make([]harnessruntime.ToolCallResult, len(calls))
 	failures := make([]toolExecutionError, len(calls))
 	var wg sync.WaitGroup
@@ -564,7 +564,7 @@ func (e Executor) executeToolCallsParallel(ctx context.Context, toolCallIDs []st
 	return results, filtered
 }
 
-func (e Executor) canExecuteToolBatchInParallel(calls []model.ToolCall) bool {
+func (e *Executor) canExecuteToolBatchInParallel(calls []model.ToolCall) bool {
 	if len(calls) < 2 {
 		return false
 	}

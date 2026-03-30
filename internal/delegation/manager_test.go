@@ -140,6 +140,40 @@ func TestBuildTaskDoesNotForwardParentMemoriesOrSummariesByDefault(t *testing.T)
 	}
 }
 
+func TestCanDelegateRejectsCyclicParentChainWithoutHanging(t *testing.T) {
+	t.Parallel()
+
+	paths := store.NewPaths(t.TempDir())
+	manager := NewManager(paths)
+	runA := harnessruntime.Run{ID: "run_a", ParentRunID: "run_b"}
+	runB := harnessruntime.Run{ID: "run_b", ParentRunID: "run_a"}
+	mustWriteRun(t, paths.RunPath(runA.ID), runA)
+	mustWriteRun(t, paths.RunPath(runB.ID), runB)
+
+	done := make(chan struct{})
+	var (
+		ok     bool
+		reason string
+	)
+	go func() {
+		ok, reason = manager.CanDelegate(context.Background(), runA, harnessruntime.PlanStep{
+			ID:          "step_1",
+			Delegatable: true,
+		})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("CanDelegate hung on cyclic parent chain")
+	}
+
+	if ok || reason != "max_depth_exceeded" {
+		t.Fatalf("expected cyclic parent chain to be rejected as max depth exceeded, got %v %q", ok, reason)
+	}
+}
+
 func mustWriteRun(t *testing.T, path string, run harnessruntime.Run) {
 	t.Helper()
 

@@ -56,7 +56,7 @@ func newChatCommand(ctx *commandContext) *cobra.Command {
 					return handleChatCommand(services, sessionID, input, output)
 				},
 				func(input string, output, errorOutput io.Writer) error {
-					response, err := services.StartRun(service.RunRequest{
+					response, err := services.StartRun(cmd.Context(), service.RunRequest{
 						Instruction: input,
 						Workspace:   services.Config.Workspace,
 						Provider:    services.Config.Model.Provider,

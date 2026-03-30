@@ -1,10 +1,10 @@
 package agui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
@@ -19,7 +19,7 @@ func NewService(services service.Services) Service {
 	return Service{services: services}
 }
 
-func (s Service) StreamChat(req ChatRequest, writer *SSEWriter) error {
+func (s Service) StreamChat(ctx context.Context, req ChatRequest, writer *SSEWriter) error {
 	message, err := lastUserMessage(req.Messages)
 	if err != nil {
 		return err
@@ -52,7 +52,7 @@ func (s Service) StreamChat(req ChatRequest, writer *SSEWriter) error {
 	observer := newChannelObserver()
 	outcomeCh := make(chan runOutcome, 1)
 	go func() {
-		response, err := s.services.StartRunStream(service.RunRequest{
+		response, err := s.services.StartRunStream(ctx, service.RunRequest{
 			Instruction: message.Content,
 			Workspace:   workspace,
 			Provider:    provider,
@@ -147,16 +147,12 @@ func (s Service) StreamChat(req ChatRequest, writer *SSEWriter) error {
 }
 
 func (s Service) initialSnapshots(runID, sessionID string) ([]Event, error) {
-	messages, err := s.services.StateStore.LoadRecentSessionMessages(sessionID, 20)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-
-	run, err := s.services.StateStore.LoadRun(runID)
+	messages, err := s.services.LoadRecentSessionMessages(sessionID, 20)
 	if err != nil {
 		return nil, err
 	}
-	state, err := s.services.StateStore.LoadState(runID)
+
+	run, state, err := s.services.LoadRunState(runID)
 	if err != nil {
 		return nil, err
 	}
