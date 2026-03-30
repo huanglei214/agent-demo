@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -208,6 +209,40 @@ func TestExecuteRunDoesNotStreamAnswerEventsForNonFinalAction(t *testing.T) {
 	}
 	if got := messages[0].Content; got != "mock response: Hello, world" {
 		t.Fatalf("expected persisted assistant message to equal concatenated deltas, got %q", got)
+	}
+}
+
+func TestExecuteRunStreamFailureEmitsFailedAnswerStreamEvent(t *testing.T) {
+	t.Parallel()
+
+	response, observer, services := executeStreamingFailureScenario(t)
+	_ = response
+
+	if got := len(observer.answerStreamEvents); got != 3 {
+		t.Fatalf("expected start, delta, and failed answer stream events, got %#v", observer.answerStreamEvents)
+	}
+	if observer.answerStreamEvents[0].Type != AnswerStreamEventStart {
+		t.Fatalf("expected first stream event to be start, got %#v", observer.answerStreamEvents)
+	}
+	if observer.answerStreamEvents[1].Type != AnswerStreamEventDelta || observer.answerStreamEvents[1].Delta != "partial answer" {
+		t.Fatalf("expected second stream event to be delta, got %#v", observer.answerStreamEvents)
+	}
+	if observer.answerStreamEvents[2].Type != AnswerStreamEventFailed {
+		t.Fatalf("expected final stream event to be failed, got %#v", observer.answerStreamEvents)
+	}
+	if got := countAnswerStreamEventType(observer.answerStreamEvents, AnswerStreamEventFailed); got != 1 {
+		t.Fatalf("expected exactly one failed answer stream event, got %#v", observer.answerStreamEvents)
+	}
+	if got := countEventTypeLoop(observer.runtimeEvents, "assistant.message"); got != 0 {
+		t.Fatalf("expected no assistant.message event on stream failure, got %d in %#v", got, eventTypesLoop(observer.runtimeEvents))
+	}
+
+	run, err := services.LoadRun("run_stream_failure")
+	if err != nil {
+		t.Fatalf("load failed run: %v", err)
+	}
+	if run.Status != harnessruntime.RunFailed {
+		t.Fatalf("expected failed run, got %#v", run)
 	}
 }
 
@@ -556,6 +591,51 @@ func executeStreamingActionScenario(t *testing.T, planMode harnessruntime.PlanMo
 	return response, observer, testTodoServices{StateStore: stateStore, EventStore: eventStore}
 }
 
+func executeStreamingFailureScenario(t *testing.T) (ExecutionResponse, *captureRunAndStreamObserver, testTodoServices) {
+	t.Helper()
+
+	workspace := t.TempDir()
+	cfg := config.Load(workspace)
+	paths := store.NewPaths(cfg.Runtime.Root)
+	stateStore := filesystemstore.NewStateStore(paths)
+	eventStore := filesystemstore.NewEventStore(paths)
+	registry := toolruntime.NewRegistry()
+	executor := NewExecutor(
+		cfg,
+		RuntimeServices{Paths: paths, EventStore: eventStore, StateStore: stateStore},
+		ModelServices{ModelFactory: func() (model.Model, error) { return &streamingFailureModel{}, nil }, PromptBuilder: prompt.NewBuilder()},
+		AgentServices{Planner: planner.New(), ContextManager: harnesscontext.NewManager(), MemoryManager: memory.NewManager(paths)},
+		ToolServices{ToolRegistry: registry, ToolExecutor: toolruntime.NewExecutor(registry)},
+		DelegationServices{DelegationManager: delegation.NewManager(paths), SkillRegistry: skill.NewRegistry(workspace)},
+	)
+
+	now := time.Now().UTC()
+	task := harnessruntime.Task{ID: "task_stream_failure", Instruction: "Summarize the repository", Workspace: workspace, CreatedAt: now}
+	session := harnessruntime.Session{ID: "session_stream_failure", Workspace: workspace, CreatedAt: now, UpdatedAt: now}
+	run := harnessruntime.Run{ID: "run_stream_failure", TaskID: task.ID, SessionID: session.ID, Role: harnessruntime.RunRoleLead, PlanMode: harnessruntime.PlanModeNone, Status: harnessruntime.RunPending, Provider: "mock", Model: "mock-model", MaxTurns: 1, CreatedAt: now, UpdatedAt: now}
+	plan := harnessruntime.Plan{ID: "plan_stream_failure", RunID: run.ID, Goal: task.Instruction, Version: 1, CreatedAt: now, UpdatedAt: now, Steps: []harnessruntime.PlanStep{{ID: "step_stream_failure", Title: "Summarize the repository", Description: task.Instruction, Status: harnessruntime.StepPending}}}
+	state := harnessruntime.RunState{RunID: run.ID, UpdatedAt: now}
+
+	for _, persist := range []func() error{
+		func() error { return stateStore.SaveTask(task) },
+		func() error { return stateStore.SaveSession(session) },
+		func() error { return stateStore.SaveRun(run) },
+		func() error { return stateStore.SavePlan(plan) },
+		func() error { return stateStore.SaveState(state) },
+	} {
+		if err := persist(); err != nil {
+			t.Fatalf("persist scenario: %v", err)
+		}
+	}
+
+	observer := &captureRunAndStreamObserver{}
+	response, err := executor.ExecuteRun(context.Background(), task, session, run, plan, state, true, observer)
+	if err == nil {
+		t.Fatal("expected streaming failure scenario to fail")
+	}
+	return response, observer, testTodoServices{StateStore: stateStore, EventStore: eventStore}
+}
+
 type streamingFinalAnswerModel struct {
 	chunks []string
 }
@@ -621,6 +701,16 @@ func countEventTypeLoop(events []harnessruntime.Event, eventType string) int {
 	return count
 }
 
+func countAnswerStreamEventType(events []AnswerStreamEvent, eventType AnswerStreamEventType) int {
+	count := 0
+	for _, event := range events {
+		if event.Type == eventType {
+			count++
+		}
+	}
+	return count
+}
+
 func eventTypesLoop(events []harnessruntime.Event) []string {
 	result := make([]string, 0, len(events))
 	for _, event := range events {
@@ -638,6 +728,8 @@ type streamingActionSequenceModel struct {
 	actions []model.Action
 	index   int
 }
+
+type streamingFailureModel struct{}
 
 func (m *todoActionSequenceModel) Generate(ctx context.Context, req model.Request) (model.Response, error) {
 	_ = ctx
@@ -688,6 +780,27 @@ func (m *streamingActionSequenceModel) GenerateStream(ctx context.Context, req m
 		}
 	}
 	return sink.Complete()
+}
+
+func (m *streamingFailureModel) Generate(ctx context.Context, req model.Request) (model.Response, error) {
+	_ = ctx
+	_ = req
+	return model.Response{Text: `{"action":"final","answer":"should not be used"}`, FinishReason: "stop"}, nil
+}
+
+func (m *streamingFailureModel) GenerateStream(ctx context.Context, req model.Request, sink model.StreamSink) error {
+	_ = ctx
+	_ = req
+	if sink == nil {
+		return nil
+	}
+	if err := sink.Start(); err != nil {
+		return err
+	}
+	if err := sink.Delta("partial answer"); err != nil {
+		return err
+	}
+	return errors.New("stream transport failed")
 }
 
 func TestPolicyContextReturnsIsolatedTaskAndStateSnapshots(t *testing.T) {

@@ -266,6 +266,7 @@ func (e *Executor) generateModelResponse(runCtx context.Context, exec *runExecut
 			if errors.As(err, &nonFinal) {
 				return nonFinal.Response, nil
 			}
+			_ = accumulator.Fail(err)
 			return model.Response{}, err
 		}
 		return model.Response{Text: accumulator.text(), FinishReason: "stop"}, nil
