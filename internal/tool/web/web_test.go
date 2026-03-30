@@ -77,6 +77,113 @@ func TestSearchToolNormalizesDuckDuckGoRedirectURL(t *testing.T) {
 	}
 }
 
+func TestSearchToolUsesTavilyWhenAPIKeyIsPresent(t *testing.T) {
+	t.Parallel()
+
+	tool := NewSearchTool()
+	tool.apiKey = "test-key"
+	tool.tavilyEndpoint = "https://api.tavily.example"
+	tool.client = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+				t.Fatalf("expected bearer auth, got %q", got)
+			}
+			if r.URL.String() != "https://api.tavily.example/search" {
+				t.Fatalf("unexpected Tavily URL: %s", r.URL.String())
+			}
+			return stringResponse(http.StatusOK, `{
+				"results": [
+					{
+						"title": "Wuhan Weather",
+						"url": "https://weather.example.com/wuhan",
+						"content": "Cloudy and 22C."
+					}
+				]
+			}`)
+		}),
+	}
+
+	result, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"query": "wuhan weather",
+		"limit": 3,
+	}))
+	if err != nil {
+		t.Fatalf("search execute: %v", err)
+	}
+
+	results := result.Content["results"].([]map[string]any)
+	if len(results) != 1 {
+		t.Fatalf("unexpected search results: %#v", result.Content)
+	}
+	if results[0]["snippet"] != "Cloudy and 22C." {
+		t.Fatalf("expected Tavily content as snippet, got %#v", results[0])
+	}
+}
+
+func TestSearchToolFallsBackToDuckDuckGoWhenTavilyRateLimited(t *testing.T) {
+	t.Parallel()
+
+	var seen []string
+	tool := NewSearchTool()
+	tool.apiKey = "test-key"
+	tool.tavilyEndpoint = "https://api.tavily.example"
+	tool.endpoint = "https://search.example.com/html/"
+	tool.client = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			seen = append(seen, r.URL.String())
+			switch r.URL.String() {
+			case "https://api.tavily.example/search":
+				return stringResponse(http.StatusTooManyRequests, `{"error":"rate limited"}`)
+			case "https://search.example.com/html/?q=wuhan+weather":
+				return stringResponse(http.StatusOK, `<a class="result__a" href="https://example.com/weather">Wuhan Weather</a>`)
+			default:
+				t.Fatalf("unexpected URL: %s", r.URL.String())
+				return nil, nil
+			}
+		}),
+	}
+
+	result, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"query": "wuhan weather"}))
+	if err != nil {
+		t.Fatalf("search execute: %v", err)
+	}
+
+	results := result.Content["results"].([]map[string]any)
+	if len(results) != 1 || results[0]["url"] != "https://example.com/weather" {
+		t.Fatalf("expected DuckDuckGo fallback result, got %#v", result.Content)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("expected Tavily then DuckDuckGo requests, got %#v", seen)
+	}
+}
+
+func TestSearchToolFallsBackToDuckDuckGoWhenTavilyReturnsNoResults(t *testing.T) {
+	t.Parallel()
+
+	tool := NewSearchTool()
+	tool.apiKey = "test-key"
+	tool.tavilyEndpoint = "https://api.tavily.example"
+	tool.endpoint = "https://search.example.com/html/"
+	tool.client = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if strings.Contains(r.URL.String(), "/search") {
+				return stringResponse(http.StatusOK, `{"results":[]}`)
+			}
+			return stringResponse(http.StatusOK, `<a class="result__a" href="https://example.com/weather">Wuhan Weather</a>`)
+		}),
+	}
+
+	result, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"query": "wuhan weather"}))
+	if err != nil {
+		t.Fatalf("search execute: %v", err)
+	}
+
+	results := result.Content["results"].([]map[string]any)
+	if len(results) != 1 || results[0]["title"] != "Wuhan Weather" {
+		t.Fatalf("expected fallback search result, got %#v", result.Content)
+	}
+}
+
 func TestSearchToolRejectsEmptyQuery(t *testing.T) {
 	t.Parallel()
 
