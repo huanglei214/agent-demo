@@ -40,6 +40,7 @@ web/node_modules/
 
 # Runtime artifacts
 .runtime/
+.worktrees/
 bin/
 log/
 
