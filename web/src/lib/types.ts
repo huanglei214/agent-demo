@@ -260,6 +260,11 @@ export type AGUIChatRequest = {
   context?: Record<string, unknown>;
 };
 
+export type AGUIStreamResult = {
+  completed: boolean;
+  interrupted: boolean;
+};
+
 export type AGUIMessage = {
   id: string;
   role: "user" | "assistant";

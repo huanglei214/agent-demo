@@ -303,6 +303,21 @@ func TestAGUIChatEndpoint(t *testing.T) {
 			t.Fatalf("expected stream body to contain %s, got %s", needle, bodyText)
 		}
 	}
+	if got := strings.Count(bodyText, `"type":"TEXT_MESSAGE_CONTENT"`); got < 2 {
+		t.Fatalf("expected multiple streamed TEXT_MESSAGE_CONTENT chunks, got %d body=%s", got, bodyText)
+	}
+	if got := strings.Count(bodyText, `"type":"TEXT_MESSAGE_START"`); got != 1 {
+		t.Fatalf("expected exactly one TEXT_MESSAGE_START, got %d body=%s", got, bodyText)
+	}
+	if got := strings.Count(bodyText, `"type":"TEXT_MESSAGE_END"`); got != 1 {
+		t.Fatalf("expected exactly one TEXT_MESSAGE_END, got %d body=%s", got, bodyText)
+	}
+	if strings.Index(bodyText, `"type":"TEXT_MESSAGE_START"`) > strings.Index(bodyText, `"type":"TEXT_MESSAGE_END"`) {
+		t.Fatalf("expected TEXT_MESSAGE_START before TEXT_MESSAGE_END, got %s", bodyText)
+	}
+	if strings.Index(bodyText, `"type":"TEXT_MESSAGE_END"`) > strings.Index(bodyText, `"type":"RUN_FINISHED"`) {
+		t.Fatalf("expected TEXT_MESSAGE_END before RUN_FINISHED, got %s", bodyText)
+	}
 	if strings.Index(bodyText, `"type":"RUN_STARTED"`) > strings.Index(bodyText, `"type":"RUN_FINISHED"`) {
 		t.Fatalf("expected RUN_STARTED before RUN_FINISHED, got %s", bodyText)
 	}

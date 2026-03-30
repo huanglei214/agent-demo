@@ -1,6 +1,7 @@
 import type {
   AGUIChatRequest,
   AGUIEvent,
+  AGUIStreamResult,
   ApiErrorResponse,
   CreateSessionResponse,
   HealthResponse,
@@ -138,7 +139,7 @@ export async function streamAGUIChat(
   handlers: {
     onEvent: (event: AGUIEvent) => void;
   },
-) {
+): Promise<AGUIStreamResult> {
   const response = await fetch("/api/agui/chat", {
     method: "POST",
     headers: {
@@ -168,32 +169,68 @@ export async function streamAGUIChat(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let sawContent = false;
+  let sawFailure = false;
+  let sawFinished = false;
+  let interrupted = false;
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
-    buffer += decoder.decode(value, { stream: true });
-    const chunks = buffer.split("\n\n");
-    buffer = chunks.pop() ?? "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split("\n\n");
+      buffer = chunks.pop() ?? "";
 
-    for (const chunk of chunks) {
-      const lines = chunk
-        .split("\n")
-        .filter((line) => line.startsWith("data: "))
-        .map((line) => line.slice("data: ".length));
-      if (!lines.length) {
-        continue;
-      }
-      try {
-        handlers.onEvent(JSON.parse(lines.join("\n")) as AGUIEvent);
-      } catch (error) {
-        console.error("Failed to parse AG-UI SSE payload", {
-          chunk,
-          error,
-        });
+      for (const chunk of chunks) {
+        const lines = chunk
+          .split("\n")
+          .filter((line) => line.startsWith("data: "))
+          .map((line) => line.slice("data: ".length));
+        if (!lines.length) {
+          continue;
+        }
+        try {
+          const event = JSON.parse(lines.join("\n")) as AGUIEvent;
+          if (event.type === "TEXT_MESSAGE_CONTENT" && event.delta) {
+            sawContent = true;
+          }
+          if (event.type === "RUN_ERROR") {
+            sawFailure = true;
+          }
+          if (event.type === "RUN_FINISHED") {
+            sawFinished = true;
+          }
+          handlers.onEvent(event);
+        } catch (error) {
+          console.error("Failed to parse AG-UI SSE payload", {
+            chunk,
+            error,
+          });
+        }
       }
     }
+  } catch (error) {
+    if (sawFinished) {
+      return {
+        completed: true,
+        interrupted: false,
+      };
+    }
+    if (sawFailure || !sawContent) {
+      throw error;
+    }
+    interrupted = true;
   }
+
+  if (!sawFinished && !sawFailure && !interrupted) {
+    throw new Error("stream ended before terminal event");
+  }
+
+  return {
+    completed: sawFinished,
+    interrupted,
+  };
 }
