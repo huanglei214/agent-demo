@@ -38,7 +38,7 @@ func (e *Executor) resumePostToolAction(runCtx context.Context, exec *runExecuti
 		Input:        followUpPrompt.Input,
 		Metadata:     followUpPrompt.Metadata,
 	}
-	followUpResponse, err := e.generateWithModelTimeout(runCtx, exec.provider, followUpRequest)
+	followUpResponse, err := e.generateModelResponse(runCtx, exec, followUpRequest)
 	if appendErr := e.appendModelCall(exec.run, modelSequence, "post_tool_resume", exec.state.PendingToolName, followUpRequest, responsePtr(followUpResponse, err), err); appendErr != nil {
 		return model.Action{}, appendErr
 	}
@@ -316,7 +316,7 @@ func (e *Executor) followUpAfterTools(runCtx context.Context, exec *runExecution
 		Input:        followUpPrompt.Input,
 		Metadata:     followUpPrompt.Metadata,
 	}
-	followUpResponse, err := e.generateWithModelTimeout(runCtx, exec.provider, followUpRequest)
+	followUpResponse, err := e.generateModelResponse(runCtx, exec, followUpRequest)
 	if appendErr := e.appendModelCall(exec.run, modelSequence, "post_tool", strings.Join(extractToolNames(calls), ","), followUpRequest, responsePtr(followUpResponse, err), err); appendErr != nil {
 		return model.Action{}, appendErr
 	}
@@ -390,7 +390,7 @@ func (e *Executor) forceFinalFromRetrieval(runCtx context.Context, exec *runExec
 		Input:        forcedPrompt.Input,
 		Metadata:     forcedPrompt.Metadata,
 	}
-	forcedResponse, err := e.generateWithModelTimeout(runCtx, exec.provider, forcedRequest)
+	forcedResponse, err := e.generateModelResponse(runCtx, exec, forcedRequest)
 	if appendErr := e.appendModelCall(exec.run, modelSequence, "forced_final", strings.Join(extractToolNames(calls), ","), forcedRequest, responsePtr(forcedResponse, err), err); appendErr != nil {
 		return model.Action{}, appendErr
 	}

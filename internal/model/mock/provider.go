@@ -70,12 +70,13 @@ func (p Provider) Generate(ctx context.Context, req model.Request) (model.Respon
 func (p Provider) GenerateStream(ctx context.Context, req model.Request, sink model.StreamSink) error {
 	resp, err := p.Generate(ctx, req)
 	if err != nil {
-		if sink != nil {
-			_ = sink.Fail(err)
-		}
 		return err
 	}
 
+	text, final := finalAnswerText(resp.Text)
+	if !final {
+		return &model.NonFinalStreamResponseError{Response: resp}
+	}
 	if sink == nil {
 		return nil
 	}
@@ -83,7 +84,6 @@ func (p Provider) GenerateStream(ctx context.Context, req model.Request, sink mo
 		return err
 	}
 
-	text := finalAnswerText(resp.Text)
 	for _, chunk := range splitStreamChunks(text) {
 		if err := sink.Delta(chunk); err != nil {
 			return err
@@ -95,15 +95,15 @@ func (p Provider) GenerateStream(ctx context.Context, req model.Request, sink mo
 	return nil
 }
 
-func finalAnswerText(responseText string) string {
+func finalAnswerText(responseText string) (string, bool) {
 	var action model.Action
 	if err := json.Unmarshal([]byte(responseText), &action); err != nil {
-		return responseText
+		return responseText, true
 	}
 	if action.Action != "final" || strings.TrimSpace(action.Answer) == "" {
-		return responseText
+		return responseText, false
 	}
-	return action.Answer
+	return action.Answer, true
 }
 
 func splitStreamChunks(text string) []string {

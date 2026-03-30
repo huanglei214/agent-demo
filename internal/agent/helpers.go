@@ -251,6 +251,29 @@ func (e *Executor) generateStreamWithModelTimeout(parent context.Context, provid
 	return provider.GenerateStream(callCtx, req, sink)
 }
 
+func (e *Executor) generateModelResponse(runCtx context.Context, exec *runExecution, req model.Request) (model.Response, error) {
+	if streamingProvider, ok := exec.provider.(model.StreamingModel); ok {
+		messageID := harnessruntime.NewID("msg")
+		accumulator := &answerStreamAccumulator{
+			observer:  ensureRunObserver(exec.observer),
+			runID:     exec.run.ID,
+			sessionID: exec.session.ID,
+			messageID: messageID,
+		}
+		err := e.generateStreamWithModelTimeout(runCtx, streamingProvider, req, accumulator)
+		if err != nil {
+			var nonFinal *model.NonFinalStreamResponseError
+			if errors.As(err, &nonFinal) {
+				return nonFinal.Response, nil
+			}
+			return model.Response{}, err
+		}
+		return model.Response{Text: accumulator.text(), FinishReason: "stop"}, nil
+	}
+
+	return e.generateWithModelTimeout(runCtx, exec.provider, req)
+}
+
 type answerStreamAccumulator struct {
 	observer  RunObserver
 	runID     string

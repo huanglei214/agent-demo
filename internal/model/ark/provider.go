@@ -187,22 +187,16 @@ func (p Provider) Generate(ctx context.Context, req internalmodel.Request) (inte
 func (p Provider) GenerateStream(ctx context.Context, req internalmodel.Request, sink internalmodel.StreamSink) error {
 	resp, err := p.Generate(ctx, req)
 	if err != nil {
-		if sink != nil {
-			_ = sink.Fail(err)
-		}
 		return err
+	}
+	text, final := finalAnswerText(resp.Text)
+	if !final {
+		return &internalmodel.NonFinalStreamResponseError{Response: resp}
 	}
 	if sink == nil {
 		return nil
 	}
 	if err := sink.Start(); err != nil {
-		return err
-	}
-	text, err := finalAnswerText(resp.Text)
-	if err != nil {
-		if sink != nil {
-			_ = sink.Fail(err)
-		}
 		return err
 	}
 	if err := sink.Delta(text); err != nil {
@@ -211,15 +205,15 @@ func (p Provider) GenerateStream(ctx context.Context, req internalmodel.Request,
 	return sink.Complete()
 }
 
-func finalAnswerText(responseText string) (string, error) {
+func finalAnswerText(responseText string) (string, bool) {
 	var action internalmodel.Action
 	if err := json.Unmarshal([]byte(responseText), &action); err != nil {
-		return responseText, nil
+		return responseText, true
 	}
 	if action.Action != "final" || strings.TrimSpace(action.Answer) == "" {
-		return responseText, nil
+		return responseText, false
 	}
-	return action.Answer, nil
+	return action.Answer, true
 }
 
 func (p Provider) acquireConcurrency(ctx context.Context) error {
