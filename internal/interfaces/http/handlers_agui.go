@@ -41,7 +41,7 @@ func (s Server) handleAGUIChat(w http.ResponseWriter, r *http.Request) {
 			req.State.Workspace,
 			err,
 		)
-		if r.Context().Err() == nil && !errors.Is(err, http.ErrAbortHandler) {
+		if !errors.Is(err, agui.ErrStreamUnwritable) {
 			_ = writer.Write(agui.Event{
 				Type:  "RUN_ERROR",
 				Error: err.Error(),

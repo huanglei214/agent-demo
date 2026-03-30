@@ -11,6 +11,8 @@ import (
 	"github.com/huanglei214/agent-demo/internal/service"
 )
 
+var ErrStreamUnwritable = errors.New("agui stream unwritable")
+
 type Service struct {
 	services service.Services
 }
@@ -92,8 +94,7 @@ func (s Service) StreamChat(_ context.Context, req ChatRequest, writer *SSEWrite
 
 			mapped := MapRuntimeEvent(event)
 			for _, item := range mapped {
-				if err := writer.Write(item); err != nil {
-					go drainRunCompletion(observer.events, outcomeCh)
+				if err := writeStreamEvent(writer, item, observer.events, outcomeCh); err != nil {
 					return err
 				}
 			}
@@ -103,7 +104,7 @@ func (s Service) StreamChat(_ context.Context, req ChatRequest, writer *SSEWrite
 					return err
 				}
 				for _, item := range snapshots {
-					if err := writer.Write(item); err != nil {
+					if err := writeStreamEvent(writer, item, observer.events, outcomeCh); err != nil {
 						return err
 					}
 				}
@@ -132,21 +133,29 @@ func (s Service) StreamChat(_ context.Context, req ChatRequest, writer *SSEWrite
 	}
 
 	if finalOutcome != nil && finalOutcome.err != nil && !sawTerminal {
-		return writer.Write(Event{
+		return writeStreamEvent(writer, Event{
 			Type:     "RUN_ERROR",
 			ThreadID: streamThreadID,
 			RunID:    streamRunID,
 			Error:    finalOutcome.err.Error(),
-		})
+		}, observer.events, outcomeCh)
 	}
 	if finalOutcome != nil && finalOutcome.err == nil && !sawTerminal && finalOutcome.response.Run.ID != "" {
-		return writer.Write(Event{
+		return writeStreamEvent(writer, Event{
 			Type:     "RUN_FINISHED",
 			ThreadID: finalOutcome.response.Run.SessionID,
 			RunID:    finalOutcome.response.Run.ID,
-		})
+		}, observer.events, outcomeCh)
 	}
 
+	return nil
+}
+
+func writeStreamEvent(writer *SSEWriter, event Event, events <-chan harnessruntime.Event, outcomes <-chan runOutcome) error {
+	if err := writer.Write(event); err != nil {
+		go drainRunCompletion(events, outcomes)
+		return fmt.Errorf("%w: %w", ErrStreamUnwritable, err)
+	}
 	return nil
 }
 

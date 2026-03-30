@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -367,33 +368,34 @@ func TestAGUIChatDisconnectDoesNotFailRun(t *testing.T) {
 		"messages": [{"id":"msg_user_1","role":"user","content":"Summarize this repository"}],
 		"state": {"workspace":"`+services.Config.Workspace+`","provider":"mock","model":"mock-model","maxTurns":4}
 	}`))
-	ctx, cancel := context.WithCancel(req.Context())
-	req = req.WithContext(ctx)
-
-	recorder := httptest.NewRecorder()
+	writer := &failingStreamWriter{failAfter: 9}
 	done := make(chan struct{})
 	go func() {
-		handler.ServeHTTP(recorder, req)
+		handler.ServeHTTP(writer, req)
 		close(done)
 	}()
 
-	cancel()
-	<-done
-
-	runs, err := services.ListRuns(1)
-	if err != nil {
-		t.Fatalf("list runs: %v", err)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not exit after stream write failure")
 	}
-	if len(runs) == 0 {
-		t.Fatalf("expected at least one run")
+	if writer.writes < 2 {
+		t.Fatalf("expected stream writer to fail after at least one write, got %d", writer.writes)
 	}
 
-	inspection, err := services.InspectRun(runs[0].ID)
-	if err != nil {
-		t.Fatalf("inspect run: %v", err)
+	bodyText := writer.body.String()
+	if !strings.Contains(bodyText, `"type":"RUN_STARTED"`) {
+		t.Fatalf("expected stream to start before failure, got %s", bodyText)
 	}
+	if strings.Contains(bodyText, `"type":"RUN_ERROR"`) {
+		t.Fatalf("expected no fallback RUN_ERROR for unwritable stream, got %s", bodyText)
+	}
+
+	runID := waitForAGUIRun(t, services)
+	inspection := waitForRunTerminalState(t, services, runID)
 	if inspection.Run.Status == harnessruntime.RunFailed {
-		t.Fatalf("expected disconnected AG-UI request not to fail run, got %#v", inspection.Run)
+		t.Fatalf("expected unwritable AG-UI stream not to fail run, got %#v", inspection.Run)
 	}
 }
 
@@ -492,6 +494,69 @@ func seedPendingRun(t *testing.T, services service.Services) string {
 	}
 	return run.ID
 }
+
+func waitForAGUIRun(t *testing.T, services service.Services) string {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		runs, err := services.ListRuns(1)
+		if err != nil {
+			t.Fatalf("list runs: %v", err)
+		}
+		if len(runs) > 0 {
+			return runs[0].ID
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("expected at least one run")
+	return ""
+}
+
+func waitForRunTerminalState(t *testing.T, services service.Services, runID string) service.InspectResponse {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		inspection, err := services.InspectRun(runID)
+		if err != nil {
+			t.Fatalf("inspect run: %v", err)
+		}
+		switch inspection.Run.Status {
+		case harnessruntime.RunCompleted, harnessruntime.RunFailed, harnessruntime.RunCancelled:
+			return inspection
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("run %s did not reach a terminal state", runID)
+	return service.InspectResponse{}
+}
+
+type failingStreamWriter struct {
+	header    http.Header
+	body      bytes.Buffer
+	writes    int
+	failAfter int
+}
+
+func (w *failingStreamWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+
+func (w *failingStreamWriter) WriteHeader(statusCode int) {}
+
+func (w *failingStreamWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.failAfter > 0 && w.writes > w.failAfter {
+		return 0, errors.New("stream closed")
+	}
+	return w.body.Write(p)
+}
+
+func (w *failingStreamWriter) Flush() {}
 
 func doJSONRequest(t *testing.T, handler http.Handler, method, path string, body any) (int, map[string]any) {
 	t.Helper()
