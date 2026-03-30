@@ -241,6 +241,86 @@ func (e *Executor) generateWithModelTimeout(parent context.Context, provider mod
 	return provider.Generate(callCtx, req)
 }
 
+func (e *Executor) generateStreamWithModelTimeout(parent context.Context, provider model.StreamingModel, req model.Request, sink model.StreamSink) error {
+	timeoutSeconds := e.Config.Model.TimeoutSeconds
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 90
+	}
+	callCtx, cancel := context.WithTimeout(parent, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+	return provider.GenerateStream(callCtx, req, sink)
+}
+
+type answerStreamAccumulator struct {
+	observer  RunObserver
+	runID     string
+	sessionID string
+	messageID string
+	started   bool
+	answer    strings.Builder
+}
+
+func (s *answerStreamAccumulator) Start() error {
+	if s.started {
+		return nil
+	}
+	s.started = true
+	s.observer.OnAnswerStreamEvent(AnswerStreamEvent{
+		RunID:     s.runID,
+		SessionID: s.sessionID,
+		MessageID: s.messageID,
+		Type:      AnswerStreamEventStart,
+	})
+	return nil
+}
+
+func (s *answerStreamAccumulator) Delta(text string) error {
+	if !s.started {
+		if err := s.Start(); err != nil {
+			return err
+		}
+	}
+	s.answer.WriteString(text)
+	s.observer.OnAnswerStreamEvent(AnswerStreamEvent{
+		RunID:     s.runID,
+		SessionID: s.sessionID,
+		MessageID: s.messageID,
+		Type:      AnswerStreamEventDelta,
+		Delta:     text,
+	})
+	return nil
+}
+
+func (s *answerStreamAccumulator) Complete() error {
+	if !s.started {
+		if err := s.Start(); err != nil {
+			return err
+		}
+	}
+	s.observer.OnAnswerStreamEvent(AnswerStreamEvent{
+		RunID:     s.runID,
+		SessionID: s.sessionID,
+		MessageID: s.messageID,
+		Type:      AnswerStreamEventCompleted,
+	})
+	return nil
+}
+
+func (s *answerStreamAccumulator) Fail(err error) error {
+	s.observer.OnAnswerStreamEvent(AnswerStreamEvent{
+		RunID:      s.runID,
+		SessionID:  s.sessionID,
+		MessageID:  s.messageID,
+		Type:       AnswerStreamEventFailed,
+		ErrMessage: err.Error(),
+	})
+	return nil
+}
+
+func (s *answerStreamAccumulator) text() string {
+	return s.answer.String()
+}
+
 func (e *Executor) GenerateWithModelTimeout(parent context.Context, provider model.Model, req model.Request) (model.Response, error) {
 	return e.generateWithModelTimeout(parent, provider, req)
 }

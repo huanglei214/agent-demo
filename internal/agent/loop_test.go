@@ -92,6 +92,69 @@ func TestExecuteRunCapturesAssistantMessageWithoutAnswerStreamEvents(t *testing.
 	}
 }
 
+func TestExecuteRunStreamedFinalAnswerPersistsOnlyFinalAssistantMessage(t *testing.T) {
+	t.Parallel()
+
+	response, observer, services := executeStreamingFinalAnswerScenario(t, []string{"mock response: Hello", ", ", "world"})
+
+	if response.Run.Status != harnessruntime.RunCompleted {
+		t.Fatalf("expected completed run, got %#v", response.Run)
+	}
+	if got := countEventTypeLoop(observer.runtimeEvents, "assistant.message"); got != 1 {
+		t.Fatalf("expected exactly one assistant.message event, got %d in %#v", got, eventTypesLoop(observer.runtimeEvents))
+	}
+	if got := len(observer.answerStreamEvents); got != 5 {
+		t.Fatalf("expected start, 3 deltas, and completed answer stream events, got %#v", observer.answerStreamEvents)
+	}
+	if observer.answerStreamEvents[0].Type != AnswerStreamEventStart {
+		t.Fatalf("expected first stream event to be start, got %#v", observer.answerStreamEvents)
+	}
+	if observer.answerStreamEvents[1].Type != AnswerStreamEventDelta || observer.answerStreamEvents[1].Delta != "mock response: Hello" {
+		t.Fatalf("expected first delta event to match first chunk, got %#v", observer.answerStreamEvents)
+	}
+	if observer.answerStreamEvents[2].Type != AnswerStreamEventDelta || observer.answerStreamEvents[2].Delta != ", " {
+		t.Fatalf("expected second delta event to match second chunk, got %#v", observer.answerStreamEvents)
+	}
+	if observer.answerStreamEvents[3].Type != AnswerStreamEventDelta || observer.answerStreamEvents[3].Delta != "world" {
+		t.Fatalf("expected third delta event to match third chunk, got %#v", observer.answerStreamEvents)
+	}
+	if observer.answerStreamEvents[4].Type != AnswerStreamEventCompleted {
+		t.Fatalf("expected final stream event to be completed, got %#v", observer.answerStreamEvents)
+	}
+
+	events, err := services.EventStore.ReadAll(response.Run.ID)
+	if err != nil {
+		t.Fatalf("load persisted events: %v", err)
+	}
+	if got := countEventTypeLoop(events, "assistant.message"); got != 1 {
+		t.Fatalf("expected one persisted assistant.message, got %d in %#v", got, eventTypesLoop(events))
+	}
+	if got := countEventTypeLoop(events, "answer.delta"); got != 0 {
+		t.Fatalf("expected no persisted answer.delta events, got %d in %#v", got, eventTypesLoop(events))
+	}
+	if len(events) == 0 {
+		t.Fatal("expected persisted runtime events")
+	}
+
+	state, err := services.StateStore.LoadState(response.Run.ID)
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	messages, err := services.StateStore.LoadSessionMessages(response.Run.SessionID)
+	if err != nil {
+		t.Fatalf("load session messages: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("expected exactly one persisted assistant message, got %#v", messages)
+	}
+	if got := messages[0].Content; got != "mock response: Hello, world" {
+		t.Fatalf("expected persisted assistant message to equal concatenated deltas, got %q", got)
+	}
+	if state.TurnCount != 1 {
+		t.Fatalf("expected one turn recorded, got %#v", state)
+	}
+}
+
 type captureRunAndStreamObserver struct {
 	runtimeEvents      []harnessruntime.Event
 	answerStreamEvents []AnswerStreamEvent
@@ -342,11 +405,85 @@ func executeTodoScenarioWithObserver(t *testing.T, planMode harnessruntime.PlanM
 		t.Fatalf("expected exactly one persisted assistant.message, got %d in %#v", got, eventTypesLoop(events))
 	}
 
-	return response, observer, testTodoServices{StateStore: stateStore}
+	return response, observer, testTodoServices{StateStore: stateStore, EventStore: eventStore}
+}
+
+func executeStreamingFinalAnswerScenario(t *testing.T, chunks []string) (ExecutionResponse, *captureRunAndStreamObserver, testTodoServices) {
+	t.Helper()
+
+	workspace := t.TempDir()
+	cfg := config.Load(workspace)
+	paths := store.NewPaths(cfg.Runtime.Root)
+	stateStore := filesystemstore.NewStateStore(paths)
+	eventStore := filesystemstore.NewEventStore(paths)
+	registry := toolruntime.NewRegistry()
+	executor := NewExecutor(
+		cfg,
+		RuntimeServices{Paths: paths, EventStore: eventStore, StateStore: stateStore},
+		ModelServices{ModelFactory: func() (model.Model, error) { return &streamingFinalAnswerModel{chunks: chunks}, nil }, PromptBuilder: prompt.NewBuilder()},
+		AgentServices{Planner: planner.New(), ContextManager: harnesscontext.NewManager(), MemoryManager: memory.NewManager(paths)},
+		ToolServices{ToolRegistry: registry, ToolExecutor: toolruntime.NewExecutor(registry)},
+		DelegationServices{DelegationManager: delegation.NewManager(paths), SkillRegistry: skill.NewRegistry(workspace)},
+	)
+
+	now := time.Now().UTC()
+	task := harnessruntime.Task{ID: "task_stream", Instruction: "Summarize the repository in one sentence", Workspace: workspace, CreatedAt: now}
+	session := harnessruntime.Session{ID: "session_stream", Workspace: workspace, CreatedAt: now, UpdatedAt: now}
+	run := harnessruntime.Run{ID: "run_stream", TaskID: task.ID, SessionID: session.ID, Role: harnessruntime.RunRoleLead, PlanMode: harnessruntime.PlanModeNone, Status: harnessruntime.RunPending, Provider: "mock", Model: "mock-model", MaxTurns: 2, CreatedAt: now, UpdatedAt: now}
+	plan := harnessruntime.Plan{ID: "plan_stream", RunID: run.ID, Goal: task.Instruction, Version: 1, CreatedAt: now, UpdatedAt: now, Steps: []harnessruntime.PlanStep{{ID: "step_stream", Title: "Summarize the repository", Description: task.Instruction, Status: harnessruntime.StepPending}}}
+	state := harnessruntime.RunState{RunID: run.ID, UpdatedAt: now}
+
+	for _, persist := range []func() error{
+		func() error { return stateStore.SaveTask(task) },
+		func() error { return stateStore.SaveSession(session) },
+		func() error { return stateStore.SaveRun(run) },
+		func() error { return stateStore.SavePlan(plan) },
+		func() error { return stateStore.SaveState(state) },
+	} {
+		if err := persist(); err != nil {
+			t.Fatalf("persist scenario: %v", err)
+		}
+	}
+
+	observer := &captureRunAndStreamObserver{}
+	response, err := executor.ExecuteRun(context.Background(), task, session, run, plan, state, true, observer)
+	if err != nil {
+		t.Fatalf("execute streaming final answer scenario: %v", err)
+	}
+
+	return response, observer, testTodoServices{StateStore: stateStore, EventStore: eventStore}
+}
+
+type streamingFinalAnswerModel struct {
+	chunks []string
+}
+
+func (m *streamingFinalAnswerModel) Generate(ctx context.Context, req model.Request) (model.Response, error) {
+	_ = ctx
+	_ = req
+	return model.Response{Text: `{"action":"final","answer":"mock response: Hello, world"}`, FinishReason: "stop"}, nil
+}
+
+func (m *streamingFinalAnswerModel) GenerateStream(ctx context.Context, req model.Request, sink model.StreamSink) error {
+	_ = ctx
+	_ = req
+	if sink == nil {
+		return nil
+	}
+	if err := sink.Start(); err != nil {
+		return err
+	}
+	for _, chunk := range m.chunks {
+		if err := sink.Delta(chunk); err != nil {
+			return err
+		}
+	}
+	return sink.Complete()
 }
 
 type testTodoServices struct {
 	StateStore filesystemstore.StateStore
+	EventStore filesystemstore.EventStore
 }
 
 func (s testTodoServices) LoadRun(runID string) (harnessruntime.Run, error) {

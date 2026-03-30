@@ -677,6 +677,48 @@ func TestStartRunStreamObserverReceivesLifecycleEvents(t *testing.T) {
 	}
 }
 
+func TestStartRunStreamReceivesStreamingAnswerEvents(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	cfg := config.Load(workspace)
+	cfg.Workspace = workspace
+	cfg.Runtime.Root = filepath.Join(workspace, ".runtime")
+	cfg.Model.Provider = "mock"
+	cfg.Model.Model = "mock-model"
+
+	services := NewServices(cfg)
+	observer := &captureStreamingRunObserver{}
+
+	services.ModelCaller = nil
+	services.Runner = nil
+	services = newTestServices(t, cfg, func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return &streamingRunModel{chunks: []string{"mock response: Hello", ", ", "world"}}, nil
+		}
+	})
+
+	response, err := services.StartRunStream(context.Background(), RunRequest{
+		Instruction: "Summarize the repository in one short paragraph",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    4,
+	}, observer)
+	if err != nil {
+		t.Fatalf("expected run to succeed, got %v", err)
+	}
+	if response.Result == nil || response.Result.Output != "mock response: Hello, world" {
+		t.Fatalf("expected streamed final answer to be persisted, got %#v", response.Result)
+	}
+	if !observer.hasAnswerEvent(agent.AnswerStreamEventStart) {
+		t.Fatalf("expected answer stream start event, got %#v", observer.answerEvents)
+	}
+	if got := observer.answerText(); got != "mock response: Hello, world" {
+		t.Fatalf("expected concatenated answer stream text, got %q", got)
+	}
+}
+
 func TestStreamedFinalAnswerMatchesParsedMockAnswer(t *testing.T) {
 	t.Parallel()
 
@@ -1632,6 +1674,65 @@ func (m *inspectingModel) Generate(ctx context.Context, req model.Request) (mode
 		Text:         string(data),
 		FinishReason: "stop",
 	}, nil
+}
+
+type streamingRunModel struct {
+	chunks []string
+}
+
+func (m *streamingRunModel) Generate(ctx context.Context, req model.Request) (model.Response, error) {
+	_ = ctx
+	_ = req
+	return model.Response{Text: `{"action":"final","answer":"mock response: Hello, world"}`, FinishReason: "stop"}, nil
+}
+
+func (m *streamingRunModel) GenerateStream(ctx context.Context, req model.Request, sink model.StreamSink) error {
+	_ = ctx
+	_ = req
+	if sink == nil {
+		return nil
+	}
+	if err := sink.Start(); err != nil {
+		return err
+	}
+	for _, chunk := range m.chunks {
+		if err := sink.Delta(chunk); err != nil {
+			return err
+		}
+	}
+	return sink.Complete()
+}
+
+type captureStreamingRunObserver struct {
+	events      []harnessruntime.Event
+	answerEvents []agent.AnswerStreamEvent
+}
+
+func (o *captureStreamingRunObserver) OnRuntimeEvent(event harnessruntime.Event) {
+	o.events = append(o.events, event)
+}
+
+func (o *captureStreamingRunObserver) OnAnswerStreamEvent(event agent.AnswerStreamEvent) {
+	o.answerEvents = append(o.answerEvents, event)
+}
+
+func (o *captureStreamingRunObserver) hasAnswerEvent(eventType agent.AnswerStreamEventType) bool {
+	for _, event := range o.answerEvents {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+func (o *captureStreamingRunObserver) answerText() string {
+	var builder strings.Builder
+	for _, event := range o.answerEvents {
+		if event.Type == agent.AnswerStreamEventDelta {
+			builder.WriteString(event.Delta)
+		}
+	}
+	return builder.String()
 }
 
 type failingModel struct {

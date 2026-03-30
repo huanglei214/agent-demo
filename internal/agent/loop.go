@@ -559,7 +559,7 @@ func (e *Executor) resolveInitialAction(runCtx context.Context, exec *runExecuti
 		Input:        runPrompt.Input,
 		Metadata:     runPrompt.Metadata,
 	}
-	modelResponse, err := e.generateWithModelTimeout(runCtx, exec.provider, modelRequest)
+	modelResponse, err := e.generateModelResponse(runCtx, exec, modelRequest)
 	if appendErr := e.appendModelCall(exec.run, modelSequence, "", "", modelRequest, responsePtr(modelResponse, err), err); appendErr != nil {
 		return model.Action{}, appendErr
 	}
@@ -584,6 +584,26 @@ func (e *Executor) resolveInitialAction(runCtx context.Context, exec *runExecuti
 		return model.Action{}, err
 	}
 	return action, nil
+}
+
+func (e *Executor) generateModelResponse(runCtx context.Context, exec *runExecution, req model.Request) (model.Response, error) {
+	if streamingProvider, ok := exec.provider.(model.StreamingModel); ok {
+		messageID := harnessruntime.NewID("msg")
+		accumulator := &answerStreamAccumulator{
+			observer:  ensureRunObserver(exec.observer),
+			runID:     exec.run.ID,
+			sessionID: exec.session.ID,
+			messageID: messageID,
+		}
+		if err := e.generateStreamWithModelTimeout(runCtx, streamingProvider, req, accumulator); err != nil {
+			_ = accumulator.Fail(err)
+			return model.Response{}, err
+		}
+		exec.finalAnswer = accumulator.text()
+		return model.Response{Text: exec.finalAnswer, FinishReason: "stop"}, nil
+	}
+
+	return e.generateWithModelTimeout(runCtx, exec.provider, req)
 }
 
 func (e *Executor) completeRun(exec *runExecution) (ExecutionResponse, error) {
