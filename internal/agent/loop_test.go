@@ -62,11 +62,43 @@ func TestValidateActionForRoleAllowsTodoForLeadAgent(t *testing.T) {
 		Action: "todo",
 		Todo: &model.TodoAction{
 			Operation: "set",
-			Items: []harnessruntime.TodoItem{{ID: "todo_1", Content: "Read README", Status: harnessruntime.TodoPending}},
+			Items:     []harnessruntime.TodoItem{{ID: "todo_1", Content: "Read README", Status: harnessruntime.TodoPending}},
 		},
 	}); err != nil {
 		t.Fatalf("expected lead-agent todo action to pass role validation, got %v", err)
 	}
+}
+
+func TestRunObserverAcceptsAnswerStreamEvents(t *testing.T) {
+	t.Parallel()
+
+	observer := &captureAnswerStreamObserver{}
+	ensured := ensureRunObserver(observer)
+	event := AnswerStreamEvent{
+		RunID:     "run_1",
+		SessionID: "session_1",
+		MessageID: "msg_1",
+		Type:      AnswerStreamEventDelta,
+		Delta:     "hello",
+	}
+	ensured.OnAnswerStreamEvent(event)
+
+	if len(observer.events) != 1 {
+		t.Fatalf("expected one answer stream event, got %#v", observer.events)
+	}
+	if observer.events[0].Type != AnswerStreamEventDelta || observer.events[0].Delta != "hello" {
+		t.Fatalf("unexpected answer stream event, got %#v", observer.events[0])
+	}
+}
+
+type captureAnswerStreamObserver struct {
+	events []AnswerStreamEvent
+}
+
+func (o *captureAnswerStreamObserver) OnRuntimeEvent(harnessruntime.Event) {}
+
+func (o *captureAnswerStreamObserver) OnAnswerStreamEvent(event AnswerStreamEvent) {
+	o.events = append(o.events, event)
 }
 
 func TestExecuteRunRejectsTodoActionWhenPlanModeIsNone(t *testing.T) {
@@ -76,7 +108,7 @@ func TestExecuteRunRejectsTodoActionWhenPlanModeIsNone(t *testing.T) {
 		Action: "todo",
 		Todo: &model.TodoAction{
 			Operation: "set",
-			Items: []harnessruntime.TodoItem{{ID: "todo_1", Content: "Read README", Status: harnessruntime.TodoPending}},
+			Items:     []harnessruntime.TodoItem{{ID: "todo_1", Content: "Read README", Status: harnessruntime.TodoPending}},
 		},
 	}})
 
@@ -150,7 +182,7 @@ func TestExecuteRunClearsTodosOnEmptySet(t *testing.T) {
 			Action: "todo",
 			Todo: &model.TodoAction{
 				Operation: "set",
-				Items: []harnessruntime.TodoItem{{ID: "todo_1", Content: "Read README", Status: harnessruntime.TodoPending}},
+				Items:     []harnessruntime.TodoItem{{ID: "todo_1", Content: "Read README", Status: harnessruntime.TodoPending}},
 			},
 		},
 		{

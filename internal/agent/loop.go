@@ -614,28 +614,6 @@ func (e *Executor) completeRun(exec *runExecution) (ExecutionResponse, error) {
 	if err := e.StateStore.AppendSessionMessage(assistantMessage); err != nil {
 		return ExecutionResponse{}, err
 	}
-	streamObserver := ensureRunObserver(exec.observer)
-	streamObserver.OnAnswerStreamEvent(AnswerStreamEvent{
-		RunID:     exec.run.ID,
-		SessionID: exec.session.ID,
-		MessageID: assistantMessage.ID,
-		Type:      AnswerStreamEventStart,
-	})
-	if assistantMessage.Content != "" {
-		streamObserver.OnAnswerStreamEvent(AnswerStreamEvent{
-			RunID:     exec.run.ID,
-			SessionID: exec.session.ID,
-			MessageID: assistantMessage.ID,
-			Type:      AnswerStreamEventDelta,
-			Delta:     assistantMessage.Content,
-		})
-	}
-	streamObserver.OnAnswerStreamEvent(AnswerStreamEvent{
-		RunID:     exec.run.ID,
-		SessionID: exec.session.ID,
-		MessageID: assistantMessage.ID,
-		Type:      AnswerStreamEventCompleted,
-	})
 	if err := e.StateStore.SaveResult(result); err != nil {
 		return ExecutionResponse{}, err
 	}
