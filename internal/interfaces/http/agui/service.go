@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/huanglei214/agent-demo/internal/agent"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
 	"github.com/huanglei214/agent-demo/internal/service"
 )
@@ -58,7 +59,7 @@ func (s Service) StreamChat(_ context.Context, req ChatRequest, writer *SSEWrite
 	deferOnExit := true
 	defer func() {
 		if deferOnExit {
-			go drainRunCompletion(observer.events, outcomeCh)
+			go drainRunCompletion(observer.events, observer.answerStream, outcomeCh)
 		}
 	}()
 	go func() {
@@ -74,6 +75,7 @@ func (s Service) StreamChat(_ context.Context, req ChatRequest, writer *SSEWrite
 		outcomeCh <- runOutcome{response: response, err: err}
 		close(outcomeCh)
 		close(observer.events)
+		close(observer.answerStream)
 	}()
 
 	var (
@@ -84,7 +86,7 @@ func (s Service) StreamChat(_ context.Context, req ChatRequest, writer *SSEWrite
 		finalOutcome   *runOutcome
 	)
 
-	for observer.events != nil || outcomeCh != nil {
+	for observer.events != nil || observer.answerStream != nil || outcomeCh != nil {
 		select {
 		case event, ok := <-observer.events:
 			if !ok {
@@ -127,6 +129,12 @@ func (s Service) StreamChat(_ context.Context, req ChatRequest, writer *SSEWrite
 			if event.Type == "run.completed" || event.Type == "run.failed" {
 				sawTerminal = true
 			}
+		case streamEvent, ok := <-observer.answerStream:
+			if !ok {
+				observer.answerStream = nil
+				continue
+			}
+			_ = streamEvent
 		case item, ok := <-outcomeCh:
 			if !ok {
 				outcomeCh = nil
@@ -165,12 +173,16 @@ func writeStreamEvent(writer *SSEWriter, event Event) error {
 	return nil
 }
 
-func drainRunCompletion(events <-chan harnessruntime.Event, outcomes <-chan runOutcome) {
-	for events != nil || outcomes != nil {
+func drainRunCompletion(events <-chan harnessruntime.Event, answerStream <-chan agent.AnswerStreamEvent, outcomes <-chan runOutcome) {
+	for events != nil || answerStream != nil || outcomes != nil {
 		select {
 		case _, ok := <-events:
 			if !ok {
 				events = nil
+			}
+		case _, ok := <-answerStream:
+			if !ok {
+				answerStream = nil
 			}
 		case _, ok := <-outcomes:
 			if !ok {
@@ -244,15 +256,21 @@ type runOutcome struct {
 }
 
 type channelObserver struct {
-	events chan harnessruntime.Event
+	events       chan harnessruntime.Event
+	answerStream chan agent.AnswerStreamEvent
 }
 
 func newChannelObserver() *channelObserver {
 	return &channelObserver{
-		events: make(chan harnessruntime.Event, 128),
+		events:       make(chan harnessruntime.Event, 128),
+		answerStream: make(chan agent.AnswerStreamEvent, 128),
 	}
 }
 
 func (o *channelObserver) OnRuntimeEvent(event harnessruntime.Event) {
 	o.events <- event
+}
+
+func (o *channelObserver) OnAnswerStreamEvent(event agent.AnswerStreamEvent) {
+	o.answerStream <- event
 }

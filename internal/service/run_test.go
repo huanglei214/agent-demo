@@ -677,6 +677,50 @@ func TestStartRunStreamObserverReceivesLifecycleEvents(t *testing.T) {
 	}
 }
 
+func TestStartRunStreamObserverCapturesAnswerStreamEvents(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	cfg := config.Load(workspace)
+	cfg.Workspace = workspace
+	cfg.Runtime.Root = filepath.Join(workspace, ".runtime")
+	cfg.Model.Provider = "mock"
+	cfg.Model.Model = "mock-model"
+
+	services := NewServices(cfg)
+	observer := &captureObserver{}
+
+	response, err := services.StartRunStream(context.Background(), RunRequest{
+		Instruction: "Summarize the repository in one short paragraph",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    4,
+	}, observer)
+	if err != nil {
+		t.Fatalf("expected run to succeed, got %v", err)
+	}
+	if response.Result == nil {
+		t.Fatalf("expected run result, got %#v", response)
+	}
+	if got := countEventType(observer.runtimeEvents, "assistant.message"); got != 1 {
+		t.Fatalf("expected exactly one assistant.message event, got %d in %#v", got, observer.runtimeEvents)
+	}
+	if got := len(observer.streamEvents); got == 0 {
+		t.Fatal("expected at least one answer stream event")
+	}
+	var sawDelta bool
+	for _, event := range observer.streamEvents {
+		if event.Type == agent.AnswerStreamEventDelta {
+			sawDelta = true
+			break
+		}
+	}
+	if !sawDelta {
+		t.Fatalf("expected at least one answer stream delta event, got %#v", observer.streamEvents)
+	}
+}
+
 func TestStartRunAllowsFollowUpToolCallBeforeFinalAnswer(t *testing.T) {
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
@@ -1496,6 +1540,21 @@ func countEventType(events []harnessruntime.Event, eventType string) int {
 
 type captureRunObserver struct {
 	events []harnessruntime.Event
+}
+
+func (o *captureRunObserver) OnAnswerStreamEvent(agent.AnswerStreamEvent) {}
+
+type captureObserver struct {
+	runtimeEvents []harnessruntime.Event
+	streamEvents  []agent.AnswerStreamEvent
+}
+
+func (o *captureObserver) OnRuntimeEvent(event harnessruntime.Event) {
+	o.runtimeEvents = append(o.runtimeEvents, event)
+}
+
+func (o *captureObserver) OnAnswerStreamEvent(event agent.AnswerStreamEvent) {
+	o.streamEvents = append(o.streamEvents, event)
 }
 
 func (o *captureRunObserver) OnRuntimeEvent(event harnessruntime.Event) {
