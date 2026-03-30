@@ -1,7 +1,11 @@
 package web
 
 import (
+	"context"
+	"errors"
 	"html"
+	"net"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -29,6 +33,8 @@ var (
 	articlePattern       = regexp.MustCompile(`(?is)<article[^>]*>(.*?)</article>`)
 	bodyPattern          = regexp.MustCompile(`(?is)<body[^>]*>(.*?)</body>`)
 )
+
+var errTavilyNoResults = errors.New("tavily returned no usable results")
 
 func normalizeLimit(limit int) int {
 	switch {
@@ -88,4 +94,29 @@ func truncateString(input string, maxRunes int) (string, bool) {
 		return input, false
 	}
 	return string(runes[:maxRunes]), true
+}
+
+func shouldFallbackFromTavily(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errTavilyNoResults) {
+		return true
+	}
+
+	var httpErr *tavilyHTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.StatusCode == 429 || httpErr.StatusCode >= 500
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+
+	var urlErr *url.Error
+	return errors.As(err, &urlErr)
 }

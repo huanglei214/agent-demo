@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -16,16 +17,20 @@ import (
 )
 
 type SearchTool struct {
-	client   *http.Client
-	endpoint string
+	client         *http.Client
+	endpoint       string
+	tavilyEndpoint string
+	apiKey         string
 }
 
 var searchResultPattern = regexp.MustCompile(`(?s)<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
 
 func NewSearchTool() SearchTool {
 	return SearchTool{
-		client:   &http.Client{Timeout: 15 * time.Second},
-		endpoint: "https://html.duckduckgo.com/html/",
+		client:         &http.Client{Timeout: 15 * time.Second},
+		endpoint:       "https://html.duckduckgo.com/html/",
+		tavilyEndpoint: "https://api.tavily.com",
+		apiKey:         strings.TrimSpace(os.Getenv("TAVILY_API_KEY")),
 	}
 }
 
@@ -56,6 +61,59 @@ func (t SearchTool) Execute(ctx context.Context, input json.RawMessage) (tool.Re
 	}
 	limit := normalizeLimit(req.Limit)
 
+	if t.apiKey != "" {
+		result, ok, err := t.executeTavilySearch(ctx, query, limit)
+		if err == nil && ok {
+			return result, nil
+		}
+		if err != nil && !shouldFallbackFromTavily(err) {
+			return tool.Result{}, err
+		}
+	}
+
+	return t.executeDuckDuckGoSearch(ctx, query, limit)
+}
+
+func (t SearchTool) executeTavilySearch(ctx context.Context, query string, limit int) (tool.Result, bool, error) {
+	var resp tavilySearchResponse
+	err := doTavilyRequest(ctx, t.client, t.tavilyEndpoint, t.apiKey, "search", tavilySearchRequest{
+		Query:      query,
+		MaxResults: limit,
+	}, &resp)
+	if err != nil {
+		return tool.Result{}, false, err
+	}
+
+	results := make([]map[string]any, 0, min(limit, len(resp.Results)))
+	for _, item := range resp.Results {
+		title := strings.TrimSpace(item.Title)
+		href := strings.TrimSpace(item.URL)
+		if title == "" || href == "" {
+			continue
+		}
+		results = append(results, map[string]any{
+			"title":   title,
+			"url":     href,
+			"snippet": strings.TrimSpace(item.Content),
+		})
+		if len(results) >= limit {
+			break
+		}
+	}
+	if len(results) == 0 {
+		return tool.Result{}, false, errTavilyNoResults
+	}
+
+	return tool.Result{
+		Content: map[string]any{
+			"query":     query,
+			"results":   results,
+			"truncated": len(resp.Results) > limit,
+		},
+	}, true, nil
+}
+
+func (t SearchTool) executeDuckDuckGoSearch(ctx context.Context, query string, limit int) (tool.Result, error) {
 	searchURL, err := url.Parse(t.endpoint)
 	if err != nil {
 		return tool.Result{}, err
