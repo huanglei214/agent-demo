@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/huanglei214/agent-demo/internal/config"
 	harnesscontext "github.com/huanglei214/agent-demo/internal/context"
@@ -11,6 +12,7 @@ import (
 	"github.com/huanglei214/agent-demo/internal/planner"
 	"github.com/huanglei214/agent-demo/internal/prompt"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
+	"github.com/huanglei214/agent-demo/internal/runtime/policy"
 	"github.com/huanglei214/agent-demo/internal/skill"
 	"github.com/huanglei214/agent-demo/internal/store"
 	toolruntime "github.com/huanglei214/agent-demo/internal/tool"
@@ -50,6 +52,7 @@ type Executor struct {
 	AgentServices
 	ToolServices
 	DelegationServices
+	Policies []policy.RuntimePolicy
 }
 
 type ExecutionResponse struct {
@@ -73,7 +76,25 @@ func NewExecutor(
 		AgentServices:      agentServices,
 		ToolServices:       toolServices,
 		DelegationServices: delegationServices,
+		Policies: []policy.RuntimePolicy{
+			policy.DelegationPolicy{Manager: delegationServices.DelegationManager},
+			policy.ReplanPolicy{},
+			policy.RetrievalPolicy{},
+		},
 	}
+}
+
+func (e *Executor) runPoliciesBeforeRun(ctx context.Context, exec *runExecution) error {
+	for _, p := range e.Policies {
+		outcome, err := p.BeforeRun(ctx, e.policyContext(exec))
+		if err != nil {
+			return err
+		}
+		if policy.HasEffect(outcome) {
+			return fmt.Errorf("unexpected policy outcome %q before implementation", outcome.Decision)
+		}
+	}
+	return nil
 }
 
 func (e *Executor) executeRun(

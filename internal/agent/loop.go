@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	promptpkg "github.com/huanglei214/agent-demo/internal/prompt"
 	"github.com/huanglei214/agent-demo/internal/retrieval"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
+	"github.com/huanglei214/agent-demo/internal/runtime/policy"
 	"github.com/huanglei214/agent-demo/internal/skill"
 )
 
@@ -36,6 +39,7 @@ type runExecution struct {
 	finalAnswer              string
 	observer                 RunObserver
 	provider                 model.Model
+	mode                     policy.ExecutionMode
 }
 
 func (e *runExecution) nextSequence() int64 {
@@ -48,6 +52,273 @@ func (e *runExecution) reserveSequences(count int) int64 {
 
 func (e *runExecution) currentSequence() int64 {
 	return e.sequence.Current()
+}
+
+func deriveExecutionMode(run harnessruntime.Run, state harnessruntime.RunState) policy.ExecutionMode {
+	if run.Role == harnessruntime.RunRoleSubagent {
+		return policy.ExecutionModeDelegated
+	}
+	if state.ResumePhase != "" {
+		return policy.ExecutionModeResume
+	}
+	return policy.ExecutionModeStructured
+}
+
+func (e *Executor) policyContext(exec *runExecution) *policy.ExecutionContext {
+	planCopy := clonePlan(exec.plan)
+	currentStepCopy := clonePlanStepPtr(exec.currentStep)
+	return &policy.ExecutionContext{
+		Task:               cloneTask(exec.task),
+		Session:            exec.session,
+		Run:                exec.run,
+		State:              cloneRunState(exec.state),
+		Plan:               &planCopy,
+		CurrentStep:        currentStepCopy,
+		Mode:               exec.mode,
+		Metadata:           map[string]any{},
+		Memories:           cloneMemoryEntries(exec.recalledMemories),
+		Summaries:          cloneSummaries(exec.summaries),
+		RetrievalProgress:  cloneRetrievalProgress(exec.retrievalProgress),
+		WorkingEvidence:    cloneStringAnyMap(exec.workingEvidence),
+		ExplicitCandidates: cloneMemoryCandidates(exec.explicitMemoryCandidates),
+		FinalAnswer:        exec.finalAnswer,
+		TurnCount:          exec.turnCount,
+	}
+}
+
+func (e *Executor) runPoliciesAfterModel(ctx context.Context, exec *runExecution, action *model.Action, allowed map[policy.PolicyDecision]struct{}, excluded map[policy.PolicyName]struct{}) (*policy.PolicyOutcome, error) {
+	for _, p := range e.Policies {
+		if excluded != nil {
+			if _, ok := excluded[policy.PolicyName(p.Name())]; ok {
+				continue
+			}
+		}
+		actionCopy := cloneAction(*action)
+		originalAction := cloneAction(*action)
+		outcome, err := p.AfterModel(ctx, e.policyContext(exec), &actionCopy)
+		if err != nil {
+			return nil, err
+		}
+		if !reflect.DeepEqual(actionCopy, originalAction) && !policy.HasEffect(outcome) {
+			return nil, errors.New("policy mutated action copy without effect")
+		}
+		if policy.HasEffect(outcome) {
+			if _, ok := allowed[outcome.Decision]; ok {
+				return outcome, nil
+			}
+			return nil, fmt.Errorf("unexpected policy outcome %q after model before implementation", outcome.Decision)
+		}
+	}
+	return nil, nil
+}
+
+func clonePlan(plan harnessruntime.Plan) harnessruntime.Plan {
+	clone := plan
+	clone.Steps = make([]harnessruntime.PlanStep, len(plan.Steps))
+	for i, step := range plan.Steps {
+		clone.Steps[i] = clonePlanStep(step)
+	}
+	return clone
+}
+
+func cloneTask(task harnessruntime.Task) harnessruntime.Task {
+	clone := task
+	if len(task.Metadata) == 0 {
+		clone.Metadata = nil
+		return clone
+	}
+	clone.Metadata = make(map[string]string, len(task.Metadata))
+	for key, value := range task.Metadata {
+		clone.Metadata[key] = value
+	}
+	return clone
+}
+
+func cloneRunState(state harnessruntime.RunState) harnessruntime.RunState {
+	clone := state
+	clone.PendingToolResult = cloneStringAnyMap(state.PendingToolResult)
+	clone.PendingToolResults = cloneToolCallResults(state.PendingToolResults)
+	clone.Todos = cloneTodoItems(state.Todos)
+	return clone
+}
+
+func clonePlanStep(step harnessruntime.PlanStep) harnessruntime.PlanStep {
+	clone := step
+	clone.Dependencies = append([]string(nil), step.Dependencies...)
+	return clone
+}
+
+func clonePlanStepPtr(step *harnessruntime.PlanStep) *harnessruntime.PlanStep {
+	if step == nil {
+		return nil
+	}
+	clone := clonePlanStep(*step)
+	return &clone
+}
+
+func cloneMemoryEntries(entries []harnessruntime.MemoryEntry) []harnessruntime.MemoryEntry {
+	clone := make([]harnessruntime.MemoryEntry, len(entries))
+	for i, entry := range entries {
+		clone[i] = entry
+		clone[i].Tags = append([]string(nil), entry.Tags...)
+	}
+	return clone
+}
+
+func cloneMemoryCandidates(candidates []harnessruntime.MemoryCandidate) []harnessruntime.MemoryCandidate {
+	clone := make([]harnessruntime.MemoryCandidate, len(candidates))
+	for i, candidate := range candidates {
+		clone[i] = candidate
+		clone[i].Tags = append([]string(nil), candidate.Tags...)
+	}
+	return clone
+}
+
+func cloneSummaries(summaries []harnessruntime.Summary) []harnessruntime.Summary {
+	return append([]harnessruntime.Summary(nil), summaries...)
+}
+
+func cloneRetrievalProgress(progress retrieval.RetrievalProgress) retrieval.RetrievalProgress {
+	clone := progress
+	clone.SearchQueries = append([]string(nil), progress.SearchQueries...)
+	clone.FetchedURLs = append([]string(nil), progress.FetchedURLs...)
+	clone.Evidence = append([]retrieval.RetrievalEvidence(nil), progress.Evidence...)
+	return clone
+}
+
+func cloneAction(action model.Action) model.Action {
+	clone := action
+	clone.Calls = cloneToolCalls(action.Calls)
+	if action.Subtask != nil {
+		subtask := *action.Subtask
+		clone.Subtask = &subtask
+	}
+	if action.Todo != nil {
+		clone.Todo = &model.TodoAction{
+			Operation: action.Todo.Operation,
+			Items:     cloneTodoItems(action.Todo.Items),
+		}
+	}
+	return clone
+}
+
+func cloneTodoItems(items []harnessruntime.TodoItem) []harnessruntime.TodoItem {
+	if len(items) == 0 {
+		return nil
+	}
+	clone := make([]harnessruntime.TodoItem, len(items))
+	copy(clone, items)
+	return clone
+}
+
+func cloneToolCalls(calls []model.ToolCall) []model.ToolCall {
+	clone := make([]model.ToolCall, len(calls))
+	for i, call := range calls {
+		clone[i] = model.ToolCall{
+			Tool:  call.Tool,
+			Input: cloneStringAnyMap(call.Input),
+		}
+	}
+	return clone
+}
+
+func cloneToolCallResults(results []harnessruntime.ToolCallResult) []harnessruntime.ToolCallResult {
+	clone := make([]harnessruntime.ToolCallResult, len(results))
+	for i, result := range results {
+		clone[i] = harnessruntime.ToolCallResult{
+			ToolCallID: result.ToolCallID,
+			Tool:       result.Tool,
+			Input:      cloneStringAnyMap(result.Input),
+			Result:     cloneStringAnyMap(result.Result),
+		}
+	}
+	return clone
+}
+
+func cloneDelegationResult(result *harnessruntime.DelegationResult) *harnessruntime.DelegationResult {
+	if result == nil {
+		return nil
+	}
+	clone := *result
+	clone.Artifacts = make([]harnessruntime.DelegationArtifact, len(result.Artifacts))
+	for i, artifact := range result.Artifacts {
+		clone.Artifacts[i] = harnessruntime.DelegationArtifact{
+			Value: artifact.Value,
+			Name:  artifact.Name,
+			Path:  artifact.Path,
+			URL:   artifact.URL,
+			Extra: cloneStringAnyMap(artifact.Extra),
+		}
+	}
+	clone.Findings = append([]string(nil), result.Findings...)
+	clone.Risks = append([]string(nil), result.Risks...)
+	clone.Recommendations = append([]string(nil), result.Recommendations...)
+	return &clone
+}
+
+func cloneActionResult(result policy.ActionResult) policy.ActionResult {
+	clone := result
+	clone.ToolCalls = cloneToolCalls(result.ToolCalls)
+	clone.ToolResults = cloneToolCallResults(result.ToolResults)
+	clone.Delegation = cloneDelegationResult(result.Delegation)
+	clone.Metadata = cloneStringAnyMap(result.Metadata)
+	return clone
+}
+
+func cloneStringAnyMap(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return map[string]any{}
+	}
+	clone := make(map[string]any, len(input))
+	for key, value := range input {
+		clone[key] = cloneAny(value)
+	}
+	return clone
+}
+
+func cloneAny(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneStringAnyMap(typed)
+	case []any:
+		clone := make([]any, len(typed))
+		for i, item := range typed {
+			clone[i] = cloneAny(item)
+		}
+		return clone
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return typed
+	}
+}
+
+func (e *Executor) runPoliciesAfterAction(ctx context.Context, exec *runExecution, action model.Action, result policy.ActionResult, allowed map[policy.PolicyDecision]struct{}, excluded map[policy.PolicyName]struct{}) (*policy.PolicyOutcome, error) {
+	for _, p := range e.Policies {
+		if excluded != nil {
+			if _, ok := excluded[policy.PolicyName(p.Name())]; ok {
+				continue
+			}
+		}
+		actionCopy := cloneAction(action)
+		resultCopy := cloneActionResult(result)
+		originalAction := cloneAction(action)
+		originalResult := cloneActionResult(result)
+		outcome, err := p.AfterAction(ctx, e.policyContext(exec), actionCopy, resultCopy)
+		if err != nil {
+			return nil, err
+		}
+		if (!reflect.DeepEqual(actionCopy, originalAction) || !reflect.DeepEqual(resultCopy, originalResult)) && !policy.HasEffect(outcome) {
+			return nil, errors.New("policy mutated action/result copy without effect")
+		}
+		if policy.HasEffect(outcome) {
+			if _, ok := allowed[outcome.Decision]; ok {
+				return outcome, nil
+			}
+			return nil, fmt.Errorf("unexpected policy outcome %q after action before implementation", outcome.Decision)
+		}
+	}
+	return nil, nil
 }
 
 func (e *Executor) ExecuteRun(ctx context.Context, task harnessruntime.Task, session harnessruntime.Session, run harnessruntime.Run, plan harnessruntime.Plan, state harnessruntime.RunState, activate bool, observer RunObserver) (ExecutionResponse, error) {
@@ -88,6 +359,11 @@ func (e *Executor) ExecuteRun(ctx context.Context, task harnessruntime.Task, ses
 		activeSkill: activeSkill,
 		sequence:    harnessruntime.NewSequenceCursor(nextSequence),
 		observer:    observer,
+		mode:        deriveExecutionMode(run, state),
+	}
+
+	if err := e.runPoliciesBeforeRun(ctx, exec); err != nil {
+		return ExecutionResponse{}, err
 	}
 
 	if activate {
@@ -110,27 +386,41 @@ func (e *Executor) ExecuteRun(ctx context.Context, task harnessruntime.Task, ses
 	if err != nil {
 		return ExecutionResponse{}, err
 	}
-	if action.Action == "delegate" {
-		action, err = e.handleDelegationAction(runCtx, exec, action)
-		if err != nil {
-			return ExecutionResponse{}, err
+	for {
+		switch action.Action {
+		case "todo":
+			action, err = e.handleTodoAction(runCtx, exec, action)
+			if err != nil {
+				return ExecutionResponse{}, err
+			}
+			continue
+		case "tool":
+			action, err = e.dispatchToolActions(runCtx, exec, action)
+			if err != nil {
+				return ExecutionResponse{}, err
+			}
+			continue
+		case "delegate":
+			action, err = e.handleDelegationAction(runCtx, exec, action)
+			if err != nil {
+				return ExecutionResponse{}, err
+			}
+			continue
+		case "final":
+			if _, err := e.runPoliciesAfterAction(runCtx, exec, action, policy.ActionResult{
+				Kind:    policy.ActionResultFinal,
+				Success: true,
+			}, nil, nil); err != nil {
+				return ExecutionResponse{}, err
+			}
+			if strings.TrimSpace(exec.finalAnswer) == "" {
+				return e.failRun(exec.run, exec.plan, exec.task.ID, exec.session.ID, exec.state, errors.New("model returned an empty final answer"), exec.nextSequence(), exec.observer)
+			}
+			return e.completeRun(exec)
+		default:
+			return e.failRun(exec.run, exec.plan, exec.task.ID, exec.session.ID, exec.state, errors.New("model returned an unsupported action"), exec.nextSequence(), exec.observer)
 		}
 	}
-	if action.Action == "tool" {
-		action, err = e.dispatchToolActions(runCtx, exec, action)
-		if err != nil {
-			return ExecutionResponse{}, err
-		}
-	}
-
-	if action.Action == "final" && strings.TrimSpace(exec.finalAnswer) == "" {
-		return e.failRun(exec.run, exec.plan, exec.task.ID, exec.session.ID, exec.state, errors.New("model returned an empty final answer"), exec.nextSequence(), exec.observer)
-	}
-	if action.Action != "final" && action.Action != "delegate" {
-		return e.failRun(exec.run, exec.plan, exec.task.ID, exec.session.ID, exec.state, errors.New("model returned an unsupported action"), exec.nextSequence(), exec.observer)
-	}
-
-	return e.completeRun(exec)
 }
 
 func (e *Executor) activateRun(exec *runExecution) error {
@@ -214,6 +504,7 @@ func (e *Executor) resolveInitialAction(runCtx context.Context, exec *runExecuti
 		Messages:     recentMessages,
 	})
 	runPrompt := e.PromptBuilder.BuildRunPrompt(exec.run.Role, exec.task, exec.plan, exec.currentStep, modelContext, e.promptToolMetadataForSkill(exec.activeSkill), exec.activeSkill)
+	runPrompt = promptpkg.InjectTodoContext(runPrompt, exec.run, exec.state)
 	exec.lastPromptBytes = len(runPrompt.System) + len(runPrompt.Input)
 	explicitMemoryCandidates, explicitMemoryAnswer, routedToMemory := e.MemoryManager.DetectExplicitRemember(memory.ExplicitRememberInput{
 		SessionID:   exec.session.ID,
@@ -287,6 +578,11 @@ func (e *Executor) resolveInitialAction(runCtx context.Context, exec *runExecuti
 	}
 	exec.finalAnswer = action.Answer
 	exec.turnCount = exec.state.TurnCount + 1
+	if _, err := e.runPoliciesAfterModel(runCtx, exec, &action, nil, map[policy.PolicyName]struct{}{
+		policy.PolicyNameDelegation: {},
+	}); err != nil {
+		return model.Action{}, err
+	}
 	return action, nil
 }
 

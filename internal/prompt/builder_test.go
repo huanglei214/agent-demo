@@ -53,6 +53,51 @@ func TestBuildRunPromptIncludesFourLayers(t *testing.T) {
 	}
 }
 
+func TestInjectTodoContextAddsSnapshotAndRulesForTodoMode(t *testing.T) {
+	t.Parallel()
+
+	base := Prompt{
+		System: "system",
+		Input:  "User instruction:\nsummarize README",
+		Metadata: map[string]any{
+			"task_id": "task_1",
+		},
+	}
+	prompt := InjectTodoContext(base, harnessruntime.Run{PlanMode: harnessruntime.PlanModeTodo}, harnessruntime.RunState{Todos: []harnessruntime.TodoItem{{ID: "todo_1", Content: "Read README", Status: harnessruntime.TodoPending}, {ID: "todo_2", Content: "Summarize docs", Status: harnessruntime.TodoInProgress}}})
+
+	for _, fragment := range []string{
+		"Todo snapshot:",
+		"Read README",
+		"Summarize docs",
+		"Use the `todo` action for complex tasks when helpful.",
+		"Use `set` with an empty list to clear todos.",
+	} {
+		if !strings.Contains(prompt.Input, fragment) {
+			t.Fatalf("expected todo prompt to contain %q, got:\n%s", fragment, prompt.Input)
+		}
+	}
+	if prompt.Metadata["plan_mode"] != string(harnessruntime.PlanModeTodo) {
+		t.Fatalf("expected todo plan_mode metadata, got %#v", prompt.Metadata)
+	}
+	if prompt.Metadata["todo_count"] != 2 {
+		t.Fatalf("expected todo_count metadata, got %#v", prompt.Metadata)
+	}
+}
+
+func TestInjectTodoContextLeavesNoneModeUnchanged(t *testing.T) {
+	t.Parallel()
+
+	base := Prompt{System: "system", Input: "User instruction:\nsummarize README", Metadata: map[string]any{"task_id": "task_1"}}
+	prompt := InjectTodoContext(base, harnessruntime.Run{PlanMode: harnessruntime.PlanModeNone}, harnessruntime.RunState{Todos: []harnessruntime.TodoItem{{ID: "todo_1", Content: "Read README", Status: harnessruntime.TodoPending}}})
+
+	if prompt.Input != base.Input {
+		t.Fatalf("expected none mode prompt input to stay unchanged, got:\n%s", prompt.Input)
+	}
+	if _, ok := prompt.Metadata["plan_mode"]; ok {
+		t.Fatalf("expected none mode metadata to stay unchanged, got %#v", prompt.Metadata)
+	}
+}
+
 func TestLoadTemplatesReadsEmbeddedFiles(t *testing.T) {
 	t.Parallel()
 

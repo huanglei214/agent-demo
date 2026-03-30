@@ -21,6 +21,7 @@ type startRunRequest struct {
 	MaxTurns    int    `json:"max_turns"`
 	SessionID   string `json:"session_id"`
 	Skill       string `json:"skill"`
+	PlanMode    string `json:"plan_mode"`
 }
 
 func (s Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
@@ -80,6 +81,7 @@ func (s Server) handleStartRun(w http.ResponseWriter, r *http.Request) {
 		MaxTurns:    maxTurns,
 		SessionID:   strings.TrimSpace(req.SessionID),
 		Skill:       strings.TrimSpace(req.Skill),
+		PlanMode:    harnessruntime.PlanMode(strings.TrimSpace(req.PlanMode)),
 	})
 	if err != nil {
 		writeServiceError(w, err)

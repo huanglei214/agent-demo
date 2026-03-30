@@ -22,6 +22,7 @@ type RunRequest struct {
 	MaxTurns    int
 	SessionID   string
 	Skill       string
+	PlanMode    harnessruntime.PlanMode
 }
 
 type RunResponse = agent.ExecutionResponse
@@ -96,6 +97,7 @@ func (s Services) startRun(ctx context.Context, req RunRequest, observer RunObse
 		TaskID:    task.ID,
 		SessionID: session.ID,
 		Role:      harnessruntime.RunRoleLead,
+		PlanMode:  derivePlanMode(req),
 		Status:    harnessruntime.RunPending,
 		Provider:  req.Provider,
 		Model:     req.Model,
@@ -105,16 +107,9 @@ func (s Services) startRun(ctx context.Context, req RunRequest, observer RunObse
 		UpdatedAt: now,
 	}
 
-	plan, err := s.Planner.CreatePlan(ctx, planner.PlanInput{
-		RunID:     run.ID,
-		Goal:      req.Instruction,
-		Workspace: req.Workspace,
-	})
+	plan, err := s.buildStartRunPlan(ctx, req, run, now)
 	if err != nil {
 		return RunResponse{}, err
-	}
-	if len(plan.Steps) == 0 {
-		return RunResponse{}, errors.New("planner returned an empty plan")
 	}
 
 	state := harnessruntime.RunState{
@@ -192,6 +187,121 @@ func (s Services) startRun(ctx context.Context, req RunRequest, observer RunObse
 		return RunResponse{}, err
 	}
 	return runner.ExecuteRun(ctx, task, session, run, plan, state, true, observer)
+}
+
+func derivePlanMode(req RunRequest) harnessruntime.PlanMode {
+	if mode := normalizePlanMode(req.PlanMode); mode != "" {
+		return mode
+	}
+	if looksLikeTodoModeInstruction(req.Instruction) {
+		return harnessruntime.PlanModeTodo
+	}
+	return harnessruntime.PlanModeNone
+}
+
+func normalizePlanMode(mode harnessruntime.PlanMode) harnessruntime.PlanMode {
+	switch harnessruntime.PlanMode(strings.ToLower(strings.TrimSpace(string(mode)))) {
+	case harnessruntime.PlanModeNone:
+		return harnessruntime.PlanModeNone
+	case harnessruntime.PlanModeTodo:
+		return harnessruntime.PlanModeTodo
+	default:
+		return ""
+	}
+}
+
+func looksLikeTodoModeInstruction(instruction string) bool {
+	trimmed := strings.TrimSpace(instruction)
+	if trimmed == "" {
+		return false
+	}
+
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(trimmed, "\n") {
+		return true
+	}
+	if strings.Contains(lower, "step by step") || strings.Contains(lower, "first") && strings.Contains(lower, "then") {
+		return true
+	}
+	if strings.Contains(trimmed, "先") && strings.Contains(trimmed, "再") {
+		return true
+	}
+	if strings.Contains(trimmed, "然后") || strings.Contains(trimmed, "接着") || strings.Contains(trimmed, "最后") {
+		return true
+	}
+	if strings.Contains(trimmed, "1.") && strings.Contains(trimmed, "2.") {
+		return true
+	}
+	return false
+}
+
+func (s Services) buildStartRunPlan(ctx context.Context, req RunRequest, run harnessruntime.Run, now time.Time) (harnessruntime.Plan, error) {
+	if run.PlanMode != harnessruntime.PlanModeTodo {
+		return compatibilityStartRunPlan(req.Instruction, run.ID, now), nil
+	}
+
+	if s.Planner == nil {
+		return harnessruntime.Plan{}, errors.New("planner not configured")
+	}
+
+	plan, err := s.Planner.CreatePlan(ctx, planner.PlanInput{
+		RunID:     run.ID,
+		Goal:      req.Instruction,
+		Workspace: req.Workspace,
+	})
+	if err != nil {
+		return harnessruntime.Plan{}, err
+	}
+	if len(plan.Steps) == 0 {
+		return harnessruntime.Plan{}, errors.New("planner returned an empty plan")
+	}
+	return plan, nil
+}
+
+func compatibilityStartRunPlan(instruction, runID string, now time.Time) harnessruntime.Plan {
+	goal := strings.TrimSpace(instruction)
+	step := harnessruntime.PlanStep{
+		ID:              harnessruntime.NewID("step"),
+		Title:           compatibilityStepTitle(goal),
+		Description:     goal,
+		Status:          harnessruntime.StepPending,
+		Delegatable:     compatibilityStepDelegatable(goal),
+		EstimatedEffort: "small",
+		OutputSchema:    "final-answer",
+	}
+	return harnessruntime.Plan{
+		ID:        harnessruntime.NewID("plan"),
+		RunID:     runID,
+		Goal:      goal,
+		Steps:     []harnessruntime.PlanStep{step},
+		Version:   1,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+}
+
+func compatibilityStepDelegatable(goal string) bool {
+	lower := strings.ToLower(goal)
+	return strings.Contains(lower, "delegate") ||
+		strings.Contains(goal, "委派") ||
+		strings.Contains(goal, "子任务") ||
+		strings.Contains(goal, "架构") ||
+		strings.Contains(goal, "方案") ||
+		strings.Contains(lower, "analyze")
+}
+
+func compatibilityStepTitle(goal string) string {
+	lower := strings.ToLower(goal)
+	switch {
+	case strings.Contains(lower, "read") || strings.Contains(goal, "读取"):
+		return "Read relevant workspace files"
+	case strings.Contains(lower, "write") || strings.Contains(goal, "写入"):
+		return "Write requested workspace artifact"
+	case strings.Contains(lower, "analyze") || strings.Contains(goal, "分析"):
+		return "Complete the requested analysis"
+	default:
+		return "Complete the requested task"
+	}
 }
 
 func (s Services) resolveActiveSkill(req RunRequest) (*skill.Definition, error) {

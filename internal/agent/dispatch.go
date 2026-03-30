@@ -14,12 +14,14 @@ import (
 	promptpkg "github.com/huanglei214/agent-demo/internal/prompt"
 	"github.com/huanglei214/agent-demo/internal/retrieval"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
+	"github.com/huanglei214/agent-demo/internal/runtime/policy"
 	toolruntime "github.com/huanglei214/agent-demo/internal/tool"
 )
 
 func (e *Executor) resumePostToolAction(runCtx context.Context, exec *runExecution) (model.Action, error) {
 	pendingToolResults := pendingToolResultsFromState(exec.state)
 	followUpPrompt := e.PromptBuilder.BuildFollowUpPrompt(exec.run.Role, exec.task, pendingToolResults, exec.workingEvidence, e.promptToolMetadataForSkill(exec.activeSkill), exec.activeSkill)
+	followUpPrompt = promptpkg.InjectTodoContext(followUpPrompt, exec.run, exec.state)
 	modelSequence := exec.nextSequence()
 	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, modelSequence, "model.called", "runtime", map[string]any{
 		"provider": exec.run.Provider,
@@ -68,6 +70,11 @@ func (e *Executor) resumePostToolAction(runCtx context.Context, exec *runExecuti
 	if err := e.StateStore.SaveState(exec.state); err != nil {
 		return model.Action{}, err
 	}
+	if _, err := e.runPoliciesAfterModel(runCtx, exec, &followUpAction, nil, map[policy.PolicyName]struct{}{
+		policy.PolicyNameDelegation: {},
+	}); err != nil {
+		return model.Action{}, err
+	}
 	return followUpAction, nil
 }
 
@@ -94,6 +101,16 @@ func (e *Executor) dispatchToolActions(runCtx context.Context, exec *runExecutio
 		}
 		toolResults, err := e.runToolBatch(runCtx, exec, calls)
 		if err != nil {
+			return model.Action{}, err
+		}
+		if _, err := e.runPoliciesAfterAction(runCtx, exec, action, policy.ActionResult{
+			Kind:        policy.ActionResultToolBatch,
+			Success:     true,
+			ToolCalls:   append([]model.ToolCall{}, calls...),
+			ToolResults: append([]harnessruntime.ToolCallResult{}, toolResults...),
+		}, nil, map[policy.PolicyName]struct{}{
+			policy.PolicyNameRetrieval: {},
+		}); err != nil {
 			return model.Action{}, err
 		}
 
@@ -282,6 +299,7 @@ func (e *Executor) maybeCompactContext(exec *runExecution, recentEvents []harnes
 
 func (e *Executor) followUpAfterTools(runCtx context.Context, exec *runExecution, calls []model.ToolCall, toolResults []harnessruntime.ToolCallResult) (model.Action, error) {
 	followUpPrompt := e.PromptBuilder.BuildFollowUpPrompt(exec.run.Role, exec.task, toolResults, exec.workingEvidence, e.promptToolMetadataForSkill(exec.activeSkill), exec.activeSkill)
+	followUpPrompt = promptpkg.InjectTodoContext(followUpPrompt, exec.run, exec.state)
 	modelSequence := exec.nextSequence()
 	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, modelSequence, "model.called", "runtime", map[string]any{
 		"provider": exec.run.Provider,
@@ -319,8 +337,24 @@ func (e *Executor) followUpAfterTools(runCtx context.Context, exec *runExecution
 	if err := validateActionForRole(exec.run.Role, followUpAction); err != nil {
 		return model.Action{}, e.failOnly(exec, err, exec.nextSequence())
 	}
-	if decision := retrieval.DecideProgress(exec.retrievalProgress, followUpAction); decision.ShouldForceFinal {
-		forcedAction, err := e.forceFinalFromRetrieval(runCtx, exec, calls, decision.Reason)
+	if _, err := e.runPoliciesAfterModel(runCtx, exec, &followUpAction, nil, map[policy.PolicyName]struct{}{
+		policy.PolicyNameDelegation: {},
+	}); err != nil {
+		return model.Action{}, err
+	}
+	outcome, err := e.runPoliciesAfterAction(runCtx, exec, followUpAction, policy.ActionResult{
+		Kind:        policy.ActionResultToolBatch,
+		Success:     true,
+		ToolCalls:   append([]model.ToolCall(nil), calls...),
+		ToolResults: append([]harnessruntime.ToolCallResult(nil), toolResults...),
+	}, map[policy.PolicyDecision]struct{}{
+		policy.DecisionForceFinal: {},
+	}, nil)
+	if err != nil {
+		return model.Action{}, err
+	}
+	if outcome != nil && outcome.Decision == policy.DecisionForceFinal {
+		forcedAction, err := e.forceFinalFromRetrieval(runCtx, exec, calls, outcome.Reason)
 		if err != nil {
 			return model.Action{}, err
 		}
@@ -339,6 +373,7 @@ func (e *Executor) forceFinalFromRetrieval(runCtx context.Context, exec *runExec
 		e.promptToolMetadataForSkill(exec.activeSkill),
 		exec.activeSkill,
 	)
+	forcedPrompt = promptpkg.InjectTodoContext(forcedPrompt, exec.run, exec.state)
 	modelSequence := exec.nextSequence()
 	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, modelSequence, "model.called", "runtime", map[string]any{
 		"provider": exec.run.Provider,
@@ -379,6 +414,11 @@ func (e *Executor) forceFinalFromRetrieval(runCtx context.Context, exec *runExec
 	if forcedAction.Action != "final" || strings.TrimSpace(forcedAction.Answer) == "" {
 		return model.Action{}, e.failOnly(exec, errors.New("forced-final model response did not produce a final answer"), exec.nextSequence())
 	}
+	if _, err := e.runPoliciesAfterModel(runCtx, exec, &forcedAction, nil, map[policy.PolicyName]struct{}{
+		policy.PolicyNameDelegation: {},
+	}); err != nil {
+		return model.Action{}, err
+	}
 	return forcedAction, nil
 }
 
@@ -400,6 +440,39 @@ func pendingToolResultsFromState(state harnessruntime.RunState) []harnessruntime
 		Tool:   state.PendingToolName,
 		Result: state.PendingToolResult,
 	}}
+}
+
+func (e *Executor) handleTodoAction(runCtx context.Context, exec *runExecution, action model.Action) (model.Action, error) {
+	if exec.run.PlanMode != harnessruntime.PlanModeTodo {
+		return model.Action{}, e.failOnly(exec, errors.New("todo action is only allowed when plan_mode=todo"), exec.nextSequence())
+	}
+	if action.Todo == nil {
+		return model.Action{}, e.failOnly(exec, errors.New("todo action did not include a todo payload"), exec.nextSequence())
+	}
+	if strings.TrimSpace(action.Todo.Operation) != "set" {
+		return model.Action{}, e.failOnly(exec, errors.New("todo action only supports operation set"), exec.nextSequence())
+	}
+
+	exec.state.Todos = cloneTodoItems(action.Todo.Items)
+	exec.state.UpdatedAt = time.Now()
+	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.nextSequence(), "todo.updated", "planner", map[string]any{
+		"operation": "set",
+		"count":     len(exec.state.Todos),
+		"items":     cloneTodoItems(exec.state.Todos),
+	}), exec.observer); err != nil {
+		return model.Action{}, err
+	}
+	exec.turnCount = exec.state.TurnCount + 1
+	exec.state.TurnCount = exec.turnCount
+	if err := e.StateStore.SaveState(exec.state); err != nil {
+		return model.Action{}, err
+	}
+
+	nextAction, err := e.resolveInitialAction(runCtx, exec, false)
+	if err != nil {
+		return model.Action{}, err
+	}
+	return nextAction, nil
 }
 
 func toolCallsFromAction(action model.Action) ([]model.ToolCall, error) {
@@ -584,21 +657,25 @@ func validateActionForRole(role harnessruntime.RunRole, action model.Action) err
 	switch role {
 	case harnessruntime.RunRoleSubagent:
 		switch action.Action {
-		case "tool", "final":
+		case "tool", "final", "delegate", "todo":
 			if action.Action == "tool" && len(action.Calls) == 0 {
 				return errors.New("subagent tool action did not include any calls")
 			}
+			if action.Action == "todo" && action.Todo == nil {
+				return errors.New("subagent todo action did not include a todo payload")
+			}
 			return nil
-		case "delegate":
-			return errors.New("subagent cannot delegate further work")
 		default:
 			return fmt.Errorf("subagent returned unsupported action %q", action.Action)
 		}
 	default:
 		switch action.Action {
-		case "tool", "final", "delegate":
+		case "tool", "final", "delegate", "todo":
 			if action.Action == "tool" && len(action.Calls) == 0 {
 				return errors.New("lead-agent tool action did not include any calls")
+			}
+			if action.Action == "todo" && action.Todo == nil {
+				return errors.New("lead-agent todo action did not include a todo payload")
 			}
 			return nil
 		default:

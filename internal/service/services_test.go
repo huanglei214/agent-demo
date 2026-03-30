@@ -212,6 +212,7 @@ func TestStartRunPassesContextToPlannerAndRunner(t *testing.T) {
 		Provider:    "test-provider",
 		Model:       "test-model",
 		MaxTurns:    1,
+		PlanMode:    harnessruntime.PlanModeTodo,
 	}); err != nil {
 		t.Fatalf("start run: %v", err)
 	}

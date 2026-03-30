@@ -159,6 +159,90 @@ func TestStartRunWithDelegationSkipsReplanWithoutSignal(t *testing.T) {
 	assertEventAbsent(t, events, "plan.updated")
 }
 
+func TestStartRunWithPostToolFollowUpDelegatesThroughDelegationPath(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("# test\n"), 0o644); err != nil {
+		t.Fatalf("seed README: %v", err)
+	}
+
+	services := newTestServices(t, config.Load(workspace), func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		factoryCalls := 0
+		modelServices.ModelFactory = func() (model.Model, error) {
+			factoryCalls++
+			switch factoryCalls {
+			case 1:
+				return &scriptedModel{responses: []model.Response{
+					{
+						Text: mustActionJSON(t, model.Action{
+							Action: "tool",
+							Calls: []model.ToolCall{{
+								Tool:  "fs.read_file",
+								Input: map[string]any{"path": "README.md"},
+							}},
+						}),
+						FinishReason: "stop",
+					},
+					{
+						Text: mustActionJSON(t, model.Action{
+							Action:         "delegate",
+							DelegationGoal: "基于 README 总结仓库",
+						}),
+						FinishReason: "stop",
+					},
+					{
+						Text: mustActionJSON(t, model.Action{
+							Action: "final",
+							Answer: "parent summary after post-tool delegation",
+						}),
+						FinishReason: "stop",
+					},
+				}}, nil
+			case 2:
+				return &scriptedModel{responses: []model.Response{
+					{
+						Text:         `{"summary":"Delegated child analysis completed successfully.","artifacts":[],"findings":[],"risks":[],"recommendations":[],"needs_replan":false}`,
+						FinishReason: "stop",
+					},
+				}}, nil
+			default:
+				t.Fatalf("unexpected model factory call %d", factoryCalls)
+				return nil, nil
+			}
+		}
+	})
+
+	response, err := services.StartRun(context.Background(), RunRequest{
+		Instruction: "先看 README，再决定是否委派子任务做总结",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    5,
+	})
+	if err != nil {
+		t.Fatalf("start run with post-tool delegation: %v", err)
+	}
+	if response.Result == nil || strings.TrimSpace(response.Result.Output) == "" {
+		t.Fatal("expected final output after post-tool delegation")
+	}
+
+	children, err := services.DelegationManager.ListChildren(response.Run.ID)
+	if err != nil {
+		t.Fatalf("list child runs: %v", err)
+	}
+	if len(children) != 1 {
+		t.Fatalf("expected delegated child from post-tool follow-up, got %d", len(children))
+	}
+
+	events, err := services.ReplayRun(response.Run.ID)
+	if err != nil {
+		t.Fatalf("replay run: %v", err)
+	}
+	assertEventPresent(t, events, "tool.called")
+	assertEventPresent(t, events, "subagent.spawned")
+	assertEventPresent(t, events, "subagent.completed")
+}
+
 func TestDecideChildReplanRequiresStructuredSignal(t *testing.T) {
 	t.Parallel()
 
@@ -341,9 +425,13 @@ func TestStartRunWithDelegationRejectsNestedDelegationFromChild(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected nested child delegation to fail")
 	}
-	if !strings.Contains(err.Error(), "subagent cannot delegate further work") {
-		t.Fatalf("expected subagent delegation guard error, got %v", err)
+	if !strings.Contains(err.Error(), "delegation rejected: ") {
+		t.Fatalf("expected policy-based delegation rejection, got %v", err)
 	}
+	if strings.Contains(err.Error(), "subagent cannot delegate further work") {
+		t.Fatalf("expected nested delegation to be rejected by policy path instead of role validation, got %v", err)
+	}
+
 }
 
 func TestStartRunDoesNotInjectConversationHistoryIntoPrompt(t *testing.T) {

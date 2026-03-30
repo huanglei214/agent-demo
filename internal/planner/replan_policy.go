@@ -18,10 +18,7 @@ func DecideChildReplan(result harnessruntime.DelegationResult) ReplanDecision {
 		return ReplanDecision{}
 	}
 
-	if strings.TrimSpace(result.Summary) == "" &&
-		len(result.Findings) == 0 &&
-		len(result.Risks) == 0 &&
-		len(result.Recommendations) == 0 {
+	if !hasChildReplanEvidence(result) {
 		return ReplanDecision{}
 	}
 
@@ -29,4 +26,11 @@ func DecideChildReplan(result harnessruntime.DelegationResult) ReplanDecision {
 		ShouldReplan: true,
 		Reason:       replanReasonChildRequested,
 	}
+}
+
+func hasChildReplanEvidence(result harnessruntime.DelegationResult) bool {
+	return strings.TrimSpace(result.Summary) != "" ||
+		len(result.Findings) > 0 ||
+		len(result.Risks) > 0 ||
+		len(result.Recommendations) > 0
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/huanglei214/agent-demo/internal/memory"
 	"github.com/huanglei214/agent-demo/internal/model"
 	arkmodel "github.com/huanglei214/agent-demo/internal/model/ark"
+	"github.com/huanglei214/agent-demo/internal/planner"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
 	"github.com/huanglei214/agent-demo/internal/store"
 	toolruntime "github.com/huanglei214/agent-demo/internal/tool"
@@ -144,6 +145,94 @@ func TestStartRunReturnsContextCanceledWhenRequestContextIsCanceled(t *testing.T
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestStartRunUsesExplicitTodoPlanMode(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Load(t.TempDir())
+	plannerStub := &planModePlanner{}
+	runnerStub := &capturingRunner{}
+	services := newTestServices(t, cfg, func(_ *agent.RuntimeServices, _ *agent.ModelServices, agentServices *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		agentServices.Planner = plannerStub
+	})
+	services.Runner = runnerStub
+
+	response, err := services.StartRun(context.Background(), RunRequest{
+		Instruction: "Summarize the repository",
+		Workspace:   cfg.Workspace,
+		Provider:    "test-provider",
+		Model:       "test-model",
+		MaxTurns:    1,
+		PlanMode:    harnessruntime.PlanModeTodo,
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if response.Run.PlanMode != harnessruntime.PlanModeTodo {
+		t.Fatalf("expected todo plan mode, got %#v", response.Run)
+	}
+	if plannerStub.calls != 1 {
+		t.Fatalf("expected planner to be called once for explicit todo mode, got %d", plannerStub.calls)
+	}
+}
+
+func TestStartRunDefaultsToNonePlanModeForSimpleInstruction(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Load(t.TempDir())
+	plannerStub := &planModePlanner{}
+	runnerStub := &capturingRunner{}
+	services := newTestServices(t, cfg, func(_ *agent.RuntimeServices, _ *agent.ModelServices, agentServices *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		agentServices.Planner = plannerStub
+	})
+	services.Runner = runnerStub
+
+	response, err := services.StartRun(context.Background(), RunRequest{
+		Instruction: "Summarize the repository",
+		Workspace:   cfg.Workspace,
+		Provider:    "test-provider",
+		Model:       "test-model",
+		MaxTurns:    1,
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if response.Run.PlanMode != harnessruntime.PlanModeNone {
+		t.Fatalf("expected none plan mode, got %#v", response.Run)
+	}
+	if plannerStub.calls != 0 {
+		t.Fatalf("expected planner not to be called for simple none-mode run, got %d", plannerStub.calls)
+	}
+}
+
+func TestStartRunAutoUpgradesComplexInstructionToTodoPlanMode(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Load(t.TempDir())
+	plannerStub := &planModePlanner{}
+	runnerStub := &capturingRunner{}
+	services := newTestServices(t, cfg, func(_ *agent.RuntimeServices, _ *agent.ModelServices, agentServices *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		agentServices.Planner = plannerStub
+	})
+	services.Runner = runnerStub
+
+	response, err := services.StartRun(context.Background(), RunRequest{
+		Instruction: "先阅读 README.md，再检查 docs/，最后总结当前项目状态",
+		Workspace:   cfg.Workspace,
+		Provider:    "test-provider",
+		Model:       "test-model",
+		MaxTurns:    1,
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if response.Run.PlanMode != harnessruntime.PlanModeTodo {
+		t.Fatalf("expected auto-upgraded todo plan mode, got %#v", response.Run)
+	}
+	if plannerStub.calls != 1 {
+		t.Fatalf("expected planner to be called once for complex todo-mode run, got %d", plannerStub.calls)
 	}
 }
 
@@ -701,6 +790,126 @@ func TestStartRunActivatesExplicitSkillAndNarrowsPromptTools(t *testing.T) {
 	assertEventPresent(t, events, "skill.activated")
 }
 
+func TestStartRunInjectsTodoPromptContextForTodoMode(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+
+	captured := &capturedModelRequest{}
+	services := newTestServices(t, config.Load(workspace), func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return &inspectingModel{
+				captured: captured,
+				response: model.Action{Action: "final", Answer: "done"},
+			}, nil
+		}
+	})
+
+	response, err := services.StartRun(context.Background(), RunRequest{
+		Instruction: "先阅读 README.md，再总结项目状态",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    4,
+		PlanMode:    harnessruntime.PlanModeTodo,
+	})
+	if err != nil {
+		t.Fatalf("start todo-mode run: %v", err)
+	}
+	if response.Run.PlanMode != harnessruntime.PlanModeTodo {
+		t.Fatalf("expected todo plan mode, got %#v", response.Run)
+	}
+	for _, fragment := range []string{"Todo snapshot:", "Todo rules:", "Use the `todo` action for complex tasks when helpful."} {
+		if !strings.Contains(captured.Input, fragment) {
+			t.Fatalf("expected captured prompt input to contain %q, got:\n%s", fragment, captured.Input)
+		}
+	}
+	if captured.Metadata["plan_mode"] != string(harnessruntime.PlanModeTodo) {
+		t.Fatalf("expected todo plan_mode metadata, got %#v", captured.Metadata)
+	}
+}
+
+func TestStartRunDoesNotInjectTodoPromptContextForNoneMode(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+
+	captured := &capturedModelRequest{}
+	services := newTestServices(t, config.Load(workspace), func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return &inspectingModel{
+				captured: captured,
+				response: model.Action{Action: "final", Answer: "done"},
+			}, nil
+		}
+	})
+
+	_, err := services.StartRun(context.Background(), RunRequest{
+		Instruction: "Summarize the repository",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    4,
+		PlanMode:    harnessruntime.PlanModeNone,
+	})
+	if err != nil {
+		t.Fatalf("start none-mode run: %v", err)
+	}
+	if strings.Contains(captured.Input, "Todo snapshot:") || strings.Contains(captured.Input, "Todo rules:") {
+		t.Fatalf("expected none-mode prompt to omit todo context, got:\n%s", captured.Input)
+	}
+}
+
+func TestStartRunEmitsTodoUpdatedEvent(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+
+	services := newTestServices(t, config.Load(workspace), func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return &actionSequenceModel{
+				responses: []model.Action{
+					{Action: "todo", Todo: &model.TodoAction{Operation: "set", Items: []harnessruntime.TodoItem{{ID: "todo_1", Content: "Read README", Status: harnessruntime.TodoPending, Priority: 1}}}},
+					{Action: "final", Answer: "done"},
+				},
+			}, nil
+		}
+	})
+
+	response, err := services.StartRun(context.Background(), RunRequest{
+		Instruction: "先阅读 README.md，再总结项目状态",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    4,
+		PlanMode:    harnessruntime.PlanModeTodo,
+	})
+	if err != nil {
+		t.Fatalf("start todo-event run: %v", err)
+	}
+	if response.Run.Status != harnessruntime.RunCompleted {
+		t.Fatalf("expected completed run, got %#v", response.Run)
+	}
+
+	events, err := services.ReplayRun(response.Run.ID)
+	if err != nil {
+		t.Fatalf("replay run: %v", err)
+	}
+	count := 0
+	for _, event := range events {
+		if event.Type != "todo.updated" {
+			continue
+		}
+		count++
+		if event.Payload["operation"] != "set" {
+			t.Fatalf("expected todo.updated operation=set, got %#v", event.Payload)
+		}
+		if got, ok := event.Payload["count"].(float64); !ok || got != 1 {
+			t.Fatalf("expected todo.updated count=1, got %#v", event.Payload)
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected one todo.updated event, got %d in %#v", count, events)
+	}
+}
+
 func TestStartRunAutoMatchesWeatherSkill(t *testing.T) {
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
@@ -1130,6 +1339,107 @@ func TestResumeRunContinuesAfterToolExecutionWithoutReplayingTool(t *testing.T) 
 	}
 }
 
+func TestResumeRunPreservesTodoSnapshotAcrossResume(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+	cfg := config.Load(workspace)
+	services := NewServices(cfg)
+	now := time.Now().UTC()
+
+	task, session, run, plan, state := seedStoredRun(t, services, workspace, now, harnessruntime.RunRunning, "run_resume_todo")
+	run.PlanMode = harnessruntime.PlanModeTodo
+	run.CurrentStepID = plan.Steps[0].ID
+	plan.Steps[0].Status = harnessruntime.StepRunning
+	state.CurrentStepID = plan.Steps[0].ID
+	state.TurnCount = 1
+	state.Todos = []harnessruntime.TodoItem{{ID: "todo_1", Content: "Read README", Status: harnessruntime.TodoPending, Priority: 1, UpdatedAt: now}}
+	if err := services.StateStore.SaveRun(run); err != nil {
+		t.Fatalf("save run: %v", err)
+	}
+	if err := services.StateStore.SavePlan(plan); err != nil {
+		t.Fatalf("save plan: %v", err)
+	}
+	if err := services.StateStore.SaveState(state); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	captured := &capturedModelRequest{}
+	services = newTestServices(t, cfg, func(runtimeServices *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		runtimeServices.EventStore = services.EventStore
+		runtimeServices.StateStore = services.StateStore
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return &inspectingModel{captured: captured, response: model.Action{Action: "final", Answer: "done"}}, nil
+		}
+	})
+
+	response, err := services.ResumeRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("resume todo run: %v", err)
+	}
+	if response.Run.Status != harnessruntime.RunCompleted {
+		t.Fatalf("expected completed resumed run, got %#v", response.Run)
+	}
+	if !strings.Contains(captured.Input, "Todo snapshot:") || !strings.Contains(captured.Input, "Read README") {
+		t.Fatalf("expected resumed prompt to include todo snapshot, got:\n%s", captured.Input)
+	}
+	gotRun, gotState, err := services.LoadRunState(run.ID)
+	if err != nil {
+		t.Fatalf("load resumed run state: %v", err)
+	}
+	if gotRun.PlanMode != harnessruntime.PlanModeTodo {
+		t.Fatalf("expected todo plan mode after resume, got %#v", gotRun)
+	}
+	if len(gotState.Todos) != 1 || gotState.Todos[0].Content != "Read README" {
+		t.Fatalf("expected preserved todo snapshot after resume, got %#v", gotState.Todos)
+	}
+	_ = task
+	_ = session
+}
+
+func TestResumeRunPreservesNoneModeWithoutTodoState(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("# test\n"), 0o644); err != nil {
+		t.Fatalf("seed README: %v", err)
+	}
+	cfg := config.Load(workspace)
+	services := NewServices(cfg)
+	now := time.Now().UTC()
+
+	_, _, run, plan, state := seedStoredRun(t, services, workspace, now, harnessruntime.RunRunning, "run_resume_none")
+	run.PlanMode = harnessruntime.PlanModeNone
+	run.CurrentStepID = plan.Steps[0].ID
+	plan.Steps[0].Status = harnessruntime.StepRunning
+	state.CurrentStepID = plan.Steps[0].ID
+	if err := services.StateStore.SaveRun(run); err != nil {
+		t.Fatalf("save run: %v", err)
+	}
+	if err := services.StateStore.SavePlan(plan); err != nil {
+		t.Fatalf("save plan: %v", err)
+	}
+	if err := services.StateStore.SaveState(state); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	response, err := services.ResumeRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("resume none-mode run: %v", err)
+	}
+	if response.Run.Status != harnessruntime.RunCompleted {
+		t.Fatalf("expected completed resumed run, got %#v", response.Run)
+	}
+	gotRun, gotState, err := services.LoadRunState(run.ID)
+	if err != nil {
+		t.Fatalf("load resumed run state: %v", err)
+	}
+	if gotRun.PlanMode != harnessruntime.PlanModeNone {
+		t.Fatalf("expected none plan mode after resume, got %#v", gotRun)
+	}
+	if len(gotState.Todos) != 0 {
+		t.Fatalf("expected no todos for none mode after resume, got %#v", gotState.Todos)
+	}
+}
+
 func TestResumeRunRejectsRunWithPersistedResult(t *testing.T) {
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
@@ -1250,6 +1560,19 @@ func (m *inspectingModel) Generate(ctx context.Context, req model.Request) (mode
 
 type failingModel struct {
 	err error
+}
+
+type planModePlanner struct {
+	calls int
+}
+
+func (p *planModePlanner) CreatePlan(ctx context.Context, input planner.PlanInput) (harnessruntime.Plan, error) {
+	p.calls++
+	return planner.New().CreatePlan(ctx, input)
+}
+
+func (p *planModePlanner) Replan(ctx context.Context, input planner.ReplanInput) (harnessruntime.Plan, error) {
+	return planner.New().Replan(ctx, input)
 }
 
 func (blockingModel) Generate(ctx context.Context, req model.Request) (model.Response, error) {

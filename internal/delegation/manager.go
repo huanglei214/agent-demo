@@ -21,6 +21,11 @@ type Policy struct {
 
 type Option func(*Policy)
 
+type DelegateChecker interface {
+	CanDelegate(context.Context, harnessruntime.Run, harnessruntime.PlanStep) (bool, string)
+	ValidateTools(harnessruntime.Run, string) error
+}
+
 type Manager struct {
 	paths  store.Paths
 	policy Policy

@@ -11,6 +11,10 @@ type RunStatus string
 
 type RunRole string
 
+type PlanMode string
+
+type TodoStatus string
+
 const (
 	RunPending   RunStatus = "pending"
 	RunRunning   RunStatus = "running"
@@ -23,6 +27,17 @@ const (
 const (
 	RunRoleLead     RunRole = "lead-agent"
 	RunRoleSubagent RunRole = "subagent"
+)
+
+const (
+	PlanModeNone PlanMode = "none"
+	PlanModeTodo PlanMode = "todo"
+)
+
+const (
+	TodoPending    TodoStatus = "pending"
+	TodoInProgress TodoStatus = "in_progress"
+	TodoDone       TodoStatus = "done"
 )
 
 type StepStatus string
@@ -74,6 +89,7 @@ type Run struct {
 	SessionID     string    `json:"session_id"`
 	ParentRunID   string    `json:"parent_run_id,omitempty"`
 	Role          RunRole   `json:"role,omitempty"`
+	PlanMode      PlanMode  `json:"plan_mode"`
 	Status        RunStatus `json:"status"`
 	CurrentStepID string    `json:"current_step_id,omitempty"`
 	Provider      string    `json:"provider"`
@@ -83,6 +99,23 @@ type Run struct {
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 	CompletedAt   time.Time `json:"completed_at,omitempty"`
+}
+
+func (r *Run) UnmarshalJSON(data []byte) error {
+	type runAlias Run
+
+	aux := runAlias{
+		PlanMode: PlanModeNone,
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	*r = Run(aux)
+	if r.PlanMode == "" {
+		r.PlanMode = PlanModeNone
+	}
+	return nil
 }
 
 type Event struct {
@@ -117,6 +150,14 @@ type PlanStep struct {
 	EstimatedEffort string     `json:"estimated_effort,omitempty"`
 	Dependencies    []string   `json:"dependencies,omitempty"`
 	OutputSchema    string     `json:"output_schema_hint,omitempty"`
+}
+
+type TodoItem struct {
+	ID        string     `json:"id"`
+	Content   string     `json:"content"`
+	Status    TodoStatus `json:"status"`
+	Priority  int        `json:"priority,omitempty"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 type Summary struct {
@@ -198,6 +239,7 @@ type RunState struct {
 	PendingToolName    string           `json:"pending_tool_name,omitempty"`
 	PendingToolResult  map[string]any   `json:"pending_tool_result,omitempty"`
 	PendingToolResults []ToolCallResult `json:"pending_tool_results,omitempty"`
+	Todos              []TodoItem       `json:"todos,omitempty"`
 	UpdatedAt          time.Time        `json:"updated_at"`
 }
 

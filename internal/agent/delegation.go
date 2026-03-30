@@ -11,18 +11,24 @@ import (
 	"github.com/huanglei214/agent-demo/internal/planner"
 	promptpkg "github.com/huanglei214/agent-demo/internal/prompt"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
+	"github.com/huanglei214/agent-demo/internal/runtime/policy"
 )
 
 func (e *Executor) handleDelegationAction(runCtx context.Context, exec *runExecution, action model.Action) (model.Action, error) {
-	canDelegate, reason := e.DelegationManager.CanDelegate(runCtx, exec.run, *exec.currentStep)
-	if !canDelegate {
+	outcome, err := e.runPoliciesAfterModel(runCtx, exec, &action, map[policy.PolicyDecision]struct{}{
+		policy.DecisionBlock: {},
+	}, nil)
+	if err != nil {
+		return model.Action{}, err
+	}
+	if outcome != nil && outcome.Decision == policy.DecisionBlock {
 		if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.nextSequence(), "subagent.rejected", "delegation", map[string]any{
 			"step_id": exec.currentStep.ID,
-			"reason":  reason,
+			"reason":  outcome.Reason,
 		}), exec.observer); err != nil {
 			return model.Action{}, err
 		}
-		return model.Action{}, e.failOnly(exec, errors.New("delegation rejected: "+reason), exec.nextSequence())
+		return model.Action{}, e.failOnly(exec, errors.New("delegation rejected: "+outcome.Reason), exec.nextSequence())
 	}
 
 	delegationGoal := strings.TrimSpace(action.DelegationGoal)
@@ -33,6 +39,22 @@ func (e *Executor) handleDelegationAction(runCtx context.Context, exec *runExecu
 	childResponse, childResult, err := e.spawnChildRun(runCtx, exec.task, exec.session, exec.run, delegationTask)
 	if err != nil {
 		return model.Action{}, e.failOnly(exec, err, exec.nextSequence())
+	}
+	actionOutcome, err := e.runPoliciesAfterAction(runCtx, exec, action, policy.ActionResult{
+		Kind:    policy.ActionResultDelegation,
+		Success: true,
+		Delegation: &harnessruntime.DelegationResult{
+			ChildRunID:      childResult.ChildRunID,
+			Summary:         childResult.Summary,
+			Artifacts:       append([]harnessruntime.DelegationArtifact{}, childResult.Artifacts...),
+			Findings:        append([]string{}, childResult.Findings...),
+			Risks:           append([]string{}, childResult.Risks...),
+			Recommendations: append([]string{}, childResult.Recommendations...),
+			NeedsReplan:     childResult.NeedsReplan,
+		},
+	}, map[policy.PolicyDecision]struct{}{policy.DecisionReplan: {}}, nil)
+	if err != nil {
+		return model.Action{}, err
 	}
 
 	start := exec.reserveSequences(2)
@@ -52,13 +74,12 @@ func (e *Executor) handleDelegationAction(runCtx context.Context, exec *runExecu
 		return model.Action{}, err
 	}
 
-	replanDecision := planner.DecideChildReplan(childResult)
-	if replanDecision.ShouldReplan {
+	if actionOutcome != nil && actionOutcome.Decision == policy.DecisionReplan {
 		replanned, err := e.Planner.Replan(runCtx, planner.ReplanInput{
 			RunID:    exec.run.ID,
 			Goal:     exec.task.Instruction,
 			Previous: exec.plan,
-			Reason:   replanDecision.Reason,
+			Reason:   actionOutcome.Reason,
 		})
 		if err != nil {
 			return model.Action{}, err
@@ -77,7 +98,7 @@ func (e *Executor) handleDelegationAction(runCtx context.Context, exec *runExecu
 		if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, exec.nextSequence(), "plan.updated", "planner", map[string]any{
 			"plan_id": exec.plan.ID,
 			"version": exec.plan.Version,
-			"reason":  replanDecision.Reason,
+			"reason":  actionOutcome.Reason,
 			"step_id": exec.currentStep.ID,
 		}), exec.observer); err != nil {
 			return model.Action{}, err
@@ -96,6 +117,7 @@ func (e *Executor) handleDelegationAction(runCtx context.Context, exec *runExecu
 		Input:      map[string]any{"child_run_id": childResponse.Run.ID},
 		Result:     delegationResultContent(childResult),
 	}}, delegationEvidence, e.promptToolMetadataForSkill(exec.activeSkill), exec.activeSkill)
+	followUpPrompt = promptpkg.InjectTodoContext(followUpPrompt, exec.run, exec.state)
 	modelSequence := exec.nextSequence()
 	if err := e.appendEvent(e.newEvent(exec.run, exec.task.ID, exec.session.ID, modelSequence, "model.called", "runtime", map[string]any{
 		"provider": exec.run.Provider,
@@ -132,6 +154,11 @@ func (e *Executor) handleDelegationAction(runCtx context.Context, exec *runExecu
 	}
 	if followUpAction.Action != "final" || strings.TrimSpace(followUpAction.Answer) == "" {
 		return model.Action{}, e.failOnly(exec, errors.New("post-delegation model response did not produce a final answer"), exec.nextSequence())
+	}
+	if _, err := e.runPoliciesAfterModel(runCtx, exec, &followUpAction, nil, map[policy.PolicyName]struct{}{
+		policy.PolicyNameDelegation: {},
+	}); err != nil {
+		return model.Action{}, err
 	}
 
 	exec.finalAnswer = followUpAction.Answer

@@ -1,6 +1,10 @@
 package model
 
-import "context"
+import (
+	"context"
+
+	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
+)
 
 type Request struct {
 	SystemPrompt string         `json:"system_prompt"`
@@ -31,6 +35,12 @@ type Action struct {
 	Calls          []ToolCall     `json:"calls,omitempty"`
 	DelegationGoal string         `json:"delegation_goal,omitempty"`
 	Subtask        *SubtaskAction `json:"subtask,omitempty"`
+	Todo           *TodoAction    `json:"todo,omitempty"`
+}
+
+type TodoAction struct {
+	Operation string                    `json:"operation"`
+	Items     []harnessruntime.TodoItem `json:"items"`
 }
 
 type SubtaskAction struct {
