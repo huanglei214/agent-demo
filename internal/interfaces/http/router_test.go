@@ -355,6 +355,48 @@ func TestAGUIChatEndpointPassesPlanModeThroughToRun(t *testing.T) {
 	}
 }
 
+func TestAGUIChatDisconnectDoesNotFailRun(t *testing.T) {
+	t.Parallel()
+
+	handler, services := newTestHandler(t)
+	if err := os.WriteFile(filepath.Join(services.Config.Workspace, "README.md"), []byte("# test\n"), 0o644); err != nil {
+		t.Fatalf("seed README: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agui/chat", bytes.NewBufferString(`{
+		"messages": [{"id":"msg_user_1","role":"user","content":"Summarize this repository"}],
+		"state": {"workspace":"`+services.Config.Workspace+`","provider":"mock","model":"mock-model","maxTurns":4}
+	}`))
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+
+	recorder := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(recorder, req)
+		close(done)
+	}()
+
+	cancel()
+	<-done
+
+	runs, err := services.ListRuns(1)
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(runs) == 0 {
+		t.Fatalf("expected at least one run")
+	}
+
+	inspection, err := services.InspectRun(runs[0].ID)
+	if err != nil {
+		t.Fatalf("inspect run: %v", err)
+	}
+	if inspection.Run.Status == harnessruntime.RunFailed {
+		t.Fatalf("expected disconnected AG-UI request not to fail run, got %#v", inspection.Run)
+	}
+}
+
 func TestAGUIChatEndpointRejectsInvalidJSON(t *testing.T) {
 	t.Parallel()
 

@@ -19,7 +19,7 @@ func NewService(services service.Services) Service {
 	return Service{services: services}
 }
 
-func (s Service) StreamChat(ctx context.Context, req ChatRequest, writer *SSEWriter) error {
+func (s Service) StreamChat(_ context.Context, req ChatRequest, writer *SSEWriter) error {
 	message, err := lastUserMessage(req.Messages)
 	if err != nil {
 		return err
@@ -52,8 +52,9 @@ func (s Service) StreamChat(ctx context.Context, req ChatRequest, writer *SSEWri
 
 	observer := newChannelObserver()
 	outcomeCh := make(chan runOutcome, 1)
+	runCtx := context.Background()
 	go func() {
-		response, err := s.services.StartRunStream(ctx, service.RunRequest{
+		response, err := s.services.StartRunStream(runCtx, service.RunRequest{
 			Instruction: message.Content,
 			Workspace:   workspace,
 			Provider:    provider,
@@ -92,6 +93,7 @@ func (s Service) StreamChat(ctx context.Context, req ChatRequest, writer *SSEWri
 			mapped := MapRuntimeEvent(event)
 			for _, item := range mapped {
 				if err := writer.Write(item); err != nil {
+					go drainRunCompletion(observer.events, outcomeCh)
 					return err
 				}
 			}
@@ -146,6 +148,21 @@ func (s Service) StreamChat(ctx context.Context, req ChatRequest, writer *SSEWri
 	}
 
 	return nil
+}
+
+func drainRunCompletion(events <-chan harnessruntime.Event, outcomes <-chan runOutcome) {
+	for events != nil || outcomes != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case _, ok := <-outcomes:
+			if !ok {
+				outcomes = nil
+			}
+		}
+	}
 }
 
 func (s Service) initialSnapshots(runID, sessionID string) ([]Event, error) {

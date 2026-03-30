@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"log"
 	"net/http"
 
@@ -40,10 +41,12 @@ func (s Server) handleAGUIChat(w http.ResponseWriter, r *http.Request) {
 			req.State.Workspace,
 			err,
 		)
-		_ = writer.Write(agui.Event{
-			Type:  "RUN_ERROR",
-			Error: err.Error(),
-		})
+		if r.Context().Err() == nil && !errors.Is(err, http.ErrAbortHandler) {
+			_ = writer.Write(agui.Event{
+				Type:  "RUN_ERROR",
+				Error: err.Error(),
+			})
+		}
 		return
 	}
 
