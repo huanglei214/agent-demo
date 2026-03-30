@@ -78,17 +78,17 @@ func TestSearchToolNormalizesDuckDuckGoRedirectURL(t *testing.T) {
 }
 
 func TestSearchToolUsesTavilyWhenAPIKeyIsPresent(t *testing.T) {
-	t.Parallel()
-
+	t.Setenv("TAVILY_API_KEY", "test-key")
 	tool := NewSearchTool()
-	tool.apiKey = "test-key"
-	tool.tavilyEndpoint = "https://api.tavily.example"
 	tool.client = &http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method != http.MethodPost {
+				t.Fatalf("expected Tavily POST request, got %s", r.Method)
+			}
 			if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
 				t.Fatalf("expected bearer auth, got %q", got)
 			}
-			if r.URL.String() != "https://api.tavily.example/search" {
+			if r.URL.String() != "https://api.tavily.com/search" {
 				t.Fatalf("unexpected Tavily URL: %s", r.URL.String())
 			}
 			return stringResponse(http.StatusOK, `{
@@ -121,20 +121,23 @@ func TestSearchToolUsesTavilyWhenAPIKeyIsPresent(t *testing.T) {
 }
 
 func TestSearchToolFallsBackToDuckDuckGoWhenTavilyRateLimited(t *testing.T) {
-	t.Parallel()
-
+	t.Setenv("TAVILY_API_KEY", "test-key")
 	var seen []string
 	tool := NewSearchTool()
-	tool.apiKey = "test-key"
-	tool.tavilyEndpoint = "https://api.tavily.example"
-	tool.endpoint = "https://search.example.com/html/"
 	tool.client = &http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			seen = append(seen, r.URL.String())
 			switch r.URL.String() {
-			case "https://api.tavily.example/search":
+			case "https://api.tavily.com/search":
+				if r.Method != http.MethodPost {
+					t.Fatalf("expected Tavily POST request, got %s", r.Method)
+				}
+				if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+					t.Fatalf("expected bearer auth, got %q", got)
+				}
 				return stringResponse(http.StatusTooManyRequests, `{"error":"rate limited"}`)
-			case "https://search.example.com/html/?q=wuhan+weather":
+			case "https://html.duckduckgo.com/html/?q=wuhan+weather":
+				t.Fatalf("unexpected DuckDuckGo fallback before Tavily branch: %#v", seen)
 				return stringResponse(http.StatusOK, `<a class="result__a" href="https://example.com/weather">Wuhan Weather</a>`)
 			default:
 				t.Fatalf("unexpected URL: %s", r.URL.String())
@@ -158,16 +161,21 @@ func TestSearchToolFallsBackToDuckDuckGoWhenTavilyRateLimited(t *testing.T) {
 }
 
 func TestSearchToolFallsBackToDuckDuckGoWhenTavilyReturnsNoResults(t *testing.T) {
-	t.Parallel()
-
+	t.Setenv("TAVILY_API_KEY", "test-key")
 	tool := NewSearchTool()
-	tool.apiKey = "test-key"
-	tool.tavilyEndpoint = "https://api.tavily.example"
-	tool.endpoint = "https://search.example.com/html/"
 	tool.client = &http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			if strings.Contains(r.URL.String(), "/search") {
+			if r.URL.String() == "https://api.tavily.com/search" {
+				if r.Method != http.MethodPost {
+					t.Fatalf("expected Tavily POST request, got %s", r.Method)
+				}
+				if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+					t.Fatalf("expected bearer auth, got %q", got)
+				}
 				return stringResponse(http.StatusOK, `{"results":[]}`)
+			}
+			if strings.Contains(r.URL.String(), "duckduckgo.com/html/") {
+				t.Fatalf("unexpected DuckDuckGo fallback before Tavily branch: %s", r.URL.String())
 			}
 			return stringResponse(http.StatusOK, `<a class="result__a" href="https://example.com/weather">Wuhan Weather</a>`)
 		}),
