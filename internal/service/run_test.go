@@ -16,6 +16,7 @@ import (
 	"github.com/huanglei214/agent-demo/internal/memory"
 	"github.com/huanglei214/agent-demo/internal/model"
 	arkmodel "github.com/huanglei214/agent-demo/internal/model/ark"
+	mockmodel "github.com/huanglei214/agent-demo/internal/model/mock"
 	"github.com/huanglei214/agent-demo/internal/planner"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
 	"github.com/huanglei214/agent-demo/internal/store"
@@ -675,6 +676,60 @@ func TestStartRunStreamObserverReceivesLifecycleEvents(t *testing.T) {
 	if !observer.hasEvent("run.completed") {
 		t.Fatalf("expected observer to receive run.completed, got %#v", observer.types())
 	}
+}
+
+func TestStreamedFinalAnswerPreservesOrderedDeltas(t *testing.T) {
+	t.Parallel()
+
+	provider := mockmodel.New()
+	sink := &captureStreamingSink{}
+
+	if err := provider.GenerateStream(context.Background(), model.Request{Input: "Hello, world"}, sink); err != nil {
+		t.Fatalf("generate stream: %v", err)
+	}
+
+	want := []string{"Hello", ", ", "world"}
+	if len(sink.deltas) != len(want) {
+		t.Fatalf("expected %d streamed deltas, got %#v", len(want), sink.deltas)
+	}
+	for i := range want {
+		if sink.deltas[i] != want[i] {
+			t.Fatalf("expected delta %d to be %q, got %q (all deltas=%#v)", i, want[i], sink.deltas[i], sink.deltas)
+		}
+	}
+	if got := sink.answer; got != "Hello, world" {
+		t.Fatalf("expected final persisted answer %q, got %q", "Hello, world", got)
+	}
+}
+
+type captureStreamingSink struct {
+	started   int
+	completed int
+	failed    int
+	deltas    []string
+	answer    string
+}
+
+func (s *captureStreamingSink) Start() error {
+	s.started++
+	return nil
+}
+
+func (s *captureStreamingSink) Delta(text string) error {
+	s.deltas = append(s.deltas, text)
+	s.answer += text
+	return nil
+}
+
+func (s *captureStreamingSink) Complete() error {
+	s.completed++
+	return nil
+}
+
+func (s *captureStreamingSink) Fail(err error) error {
+	_ = err
+	s.failed++
+	return nil
 }
 
 func TestStartRunAllowsFollowUpToolCallBeforeFinalAnswer(t *testing.T) {

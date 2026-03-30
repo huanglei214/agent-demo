@@ -183,6 +183,26 @@ func (p Provider) Generate(ctx context.Context, req internalmodel.Request) (inte
 	}, nil
 }
 
+func (p Provider) GenerateStream(ctx context.Context, req internalmodel.Request, sink internalmodel.StreamSink) error {
+	resp, err := p.Generate(ctx, req)
+	if err != nil {
+		if sink != nil {
+			_ = sink.Fail(err)
+		}
+		return err
+	}
+	if sink == nil {
+		return nil
+	}
+	if err := sink.Start(); err != nil {
+		return err
+	}
+	if err := sink.Delta(resp.Text); err != nil {
+		return err
+	}
+	return sink.Complete()
+}
+
 func (p Provider) acquireConcurrency(ctx context.Context) error {
 	if p.concurrency == nil {
 		return nil
