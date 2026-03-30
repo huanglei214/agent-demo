@@ -21,7 +21,7 @@ func NewService(services service.Services) Service {
 	return Service{services: services}
 }
 
-func (s Service) StreamChat(_ context.Context, req ChatRequest, writer *SSEWriter) error {
+func (s Service) StreamChat(_ context.Context, req ChatRequest, writer *SSEWriter) (err error) {
 	message, err := lastUserMessage(req.Messages)
 	if err != nil {
 		return err
@@ -55,6 +55,12 @@ func (s Service) StreamChat(_ context.Context, req ChatRequest, writer *SSEWrite
 	observer := newChannelObserver()
 	outcomeCh := make(chan runOutcome, 1)
 	runCtx := context.Background()
+	deferOnExit := true
+	defer func() {
+		if deferOnExit {
+			go drainRunCompletion(observer.events, outcomeCh)
+		}
+	}()
 	go func() {
 		response, err := s.services.StartRunStream(runCtx, service.RunRequest{
 			Instruction: message.Content,
@@ -94,7 +100,7 @@ func (s Service) StreamChat(_ context.Context, req ChatRequest, writer *SSEWrite
 
 			mapped := MapRuntimeEvent(event)
 			for _, item := range mapped {
-				if err := writeStreamEvent(writer, item, observer.events, outcomeCh); err != nil {
+				if err = writeStreamEvent(writer, item); err != nil {
 					return err
 				}
 			}
@@ -104,7 +110,7 @@ func (s Service) StreamChat(_ context.Context, req ChatRequest, writer *SSEWrite
 					return err
 				}
 				for _, item := range snapshots {
-					if err := writeStreamEvent(writer, item, observer.events, outcomeCh); err != nil {
+					if err = writeStreamEvent(writer, item); err != nil {
 						return err
 					}
 				}
@@ -131,6 +137,7 @@ func (s Service) StreamChat(_ context.Context, req ChatRequest, writer *SSEWrite
 			outcomeCh = nil
 		}
 	}
+	deferOnExit = false
 
 	if finalOutcome != nil && finalOutcome.err != nil && !sawTerminal {
 		return writeStreamEvent(writer, Event{
@@ -138,22 +145,21 @@ func (s Service) StreamChat(_ context.Context, req ChatRequest, writer *SSEWrite
 			ThreadID: streamThreadID,
 			RunID:    streamRunID,
 			Error:    finalOutcome.err.Error(),
-		}, observer.events, outcomeCh)
+		})
 	}
 	if finalOutcome != nil && finalOutcome.err == nil && !sawTerminal && finalOutcome.response.Run.ID != "" {
 		return writeStreamEvent(writer, Event{
 			Type:     "RUN_FINISHED",
 			ThreadID: finalOutcome.response.Run.SessionID,
 			RunID:    finalOutcome.response.Run.ID,
-		}, observer.events, outcomeCh)
+		})
 	}
 
 	return nil
 }
 
-func writeStreamEvent(writer *SSEWriter, event Event, events <-chan harnessruntime.Event, outcomes <-chan runOutcome) error {
+func writeStreamEvent(writer *SSEWriter, event Event) error {
 	if err := writer.Write(event); err != nil {
-		go drainRunCompletion(events, outcomes)
 		return fmt.Errorf("%w: %w", ErrStreamUnwritable, err)
 	}
 	return nil

@@ -380,8 +380,11 @@ func TestAGUIChatDisconnectDoesNotFailRun(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("handler did not exit after stream write failure")
 	}
-	if writer.writes < 2 {
-		t.Fatalf("expected stream writer to fail after at least one write, got %d", writer.writes)
+	if !writer.failed {
+		t.Fatalf("expected stream writer to fail, got writes=%d err=%v", writer.writes, writer.lastErr)
+	}
+	if writer.lastErr == nil {
+		t.Fatal("expected failing stream writer to capture a concrete error")
 	}
 
 	bodyText := writer.body.String()
@@ -394,8 +397,8 @@ func TestAGUIChatDisconnectDoesNotFailRun(t *testing.T) {
 
 	runID := waitForAGUIRun(t, services)
 	inspection := waitForRunTerminalState(t, services, runID)
-	if inspection.Run.Status == harnessruntime.RunFailed {
-		t.Fatalf("expected unwritable AG-UI stream not to fail run, got %#v", inspection.Run)
+	if inspection.Run.Status != harnessruntime.RunCompleted {
+		t.Fatalf("expected unwritable AG-UI stream to complete run, got %#v", inspection.Run)
 	}
 }
 
@@ -537,6 +540,8 @@ type failingStreamWriter struct {
 	body      bytes.Buffer
 	writes    int
 	failAfter int
+	failed    bool
+	lastErr   error
 }
 
 func (w *failingStreamWriter) Header() http.Header {
@@ -551,7 +556,9 @@ func (w *failingStreamWriter) WriteHeader(statusCode int) {}
 func (w *failingStreamWriter) Write(p []byte) (int, error) {
 	w.writes++
 	if w.failAfter > 0 && w.writes > w.failAfter {
-		return 0, errors.New("stream closed")
+		w.failed = true
+		w.lastErr = errors.New("stream closed")
+		return 0, w.lastErr
 	}
 	return w.body.Write(p)
 }
