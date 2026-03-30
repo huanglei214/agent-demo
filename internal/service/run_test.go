@@ -16,7 +16,6 @@ import (
 	"github.com/huanglei214/agent-demo/internal/memory"
 	"github.com/huanglei214/agent-demo/internal/model"
 	arkmodel "github.com/huanglei214/agent-demo/internal/model/ark"
-	mockmodel "github.com/huanglei214/agent-demo/internal/model/mock"
 	"github.com/huanglei214/agent-demo/internal/planner"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
 	"github.com/huanglei214/agent-demo/internal/store"
@@ -678,17 +677,37 @@ func TestStartRunStreamObserverReceivesLifecycleEvents(t *testing.T) {
 	}
 }
 
-func TestStreamedFinalAnswerPreservesOrderedDeltas(t *testing.T) {
+func TestStreamedFinalAnswerMatchesParsedMockAnswer(t *testing.T) {
 	t.Parallel()
 
-	provider := mockmodel.New()
+	workspace := t.TempDir()
+	cfg := config.Load(workspace)
+	cfg.Model.Provider = "mock"
+	cfg.Model.Model = "mock-model"
+
+	provider, err := newModelServices(cfg).ModelFactory()
+	if err != nil {
+		t.Fatalf("model factory: %v", err)
+	}
+	streamingProvider, ok := provider.(model.StreamingModel)
+	if !ok {
+		t.Fatalf("expected mock provider to implement StreamingModel, got %T", provider)
+	}
+
 	sink := &captureStreamingSink{}
 
-	if err := provider.GenerateStream(context.Background(), model.Request{Input: "Hello, world"}, sink); err != nil {
+	req := model.Request{Input: "Hello, world"}
+	resp, err := provider.Generate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	wantAnswer := agent.ParseAction(resp.Text).Answer
+
+	if err := streamingProvider.GenerateStream(context.Background(), req, sink); err != nil {
 		t.Fatalf("generate stream: %v", err)
 	}
 
-	want := []string{"Hello", ", ", "world"}
+	want := []string{"mock response: Hello", ", ", "world"}
 	if len(sink.deltas) != len(want) {
 		t.Fatalf("expected %d streamed deltas, got %#v", len(want), sink.deltas)
 	}
@@ -697,8 +716,8 @@ func TestStreamedFinalAnswerPreservesOrderedDeltas(t *testing.T) {
 			t.Fatalf("expected delta %d to be %q, got %q (all deltas=%#v)", i, want[i], sink.deltas[i], sink.deltas)
 		}
 	}
-	if got := sink.answer; got != "Hello, world" {
-		t.Fatalf("expected final persisted answer %q, got %q", "Hello, world", got)
+	if got := sink.answer; got != wantAnswer {
+		t.Fatalf("expected final persisted answer %q, got %q", wantAnswer, got)
 	}
 }
 

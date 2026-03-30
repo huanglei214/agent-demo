@@ -102,7 +102,7 @@ func TestGenerateStreamFallsBackToSingleDelta(t *testing.T) {
 	if sink.started != 1 || sink.completed != 1 || sink.failed != 0 {
 		t.Fatalf("unexpected sink lifecycle: %#v", sink)
 	}
-	if got := sink.deltas; len(got) != 1 || got[0] != `{"action":"final","answer":"hello"}` {
+	if got := sink.deltas; len(got) != 1 || got[0] != "hello" {
 		t.Fatalf("expected single fallback delta with final text, got %#v", got)
 	}
 }

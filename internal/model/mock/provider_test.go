@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/huanglei214/agent-demo/internal/agent"
 	"github.com/huanglei214/agent-demo/internal/model"
 )
 
@@ -11,16 +12,19 @@ func TestGenerateStreamEmitsOrderedDeltas(t *testing.T) {
 	t.Parallel()
 
 	provider := New()
-	sink := &capturingStreamSink{}
-
-	err := provider.GenerateStream(context.Background(), model.Request{
-		Input: "Hello, world",
-	}, sink)
+	req := model.Request{Input: "Hello, world"}
+	resp, err := provider.Generate(context.Background(), req)
 	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	wantAnswer := agent.ParseAction(resp.Text).Answer
+
+	sink := &capturingStreamSink{}
+	if err := provider.GenerateStream(context.Background(), req, sink); err != nil {
 		t.Fatalf("generate stream: %v", err)
 	}
 
-	want := []string{"Hello", ", ", "world"}
+	want := []string{"mock response: Hello", ", ", "world"}
 	if got := sink.deltas; len(got) != len(want) {
 		t.Fatalf("expected %d streamed deltas, got %#v", len(want), got)
 	} else {
@@ -30,7 +34,6 @@ func TestGenerateStreamEmitsOrderedDeltas(t *testing.T) {
 			}
 		}
 	}
-
 	if sink.started != 1 {
 		t.Fatalf("expected one start event, got %d", sink.started)
 	}
@@ -40,8 +43,8 @@ func TestGenerateStreamEmitsOrderedDeltas(t *testing.T) {
 	if sink.failed != 0 {
 		t.Fatalf("expected no failures, got %d", sink.failed)
 	}
-	if got := sink.text(); got != "Hello, world" {
-		t.Fatalf("expected streamed answer %q, got %q", "Hello, world", got)
+	if got := sink.text(); got != wantAnswer {
+		t.Fatalf("expected streamed answer %q, got %q", wantAnswer, got)
 	}
 }
 

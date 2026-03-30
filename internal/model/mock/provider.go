@@ -83,7 +83,7 @@ func (p Provider) GenerateStream(ctx context.Context, req model.Request, sink mo
 		return err
 	}
 
-	text := streamText(resp.Text)
+	text := finalAnswerText(resp.Text)
 	for _, chunk := range splitStreamChunks(text) {
 		if err := sink.Delta(chunk); err != nil {
 			return err
@@ -95,15 +95,15 @@ func (p Provider) GenerateStream(ctx context.Context, req model.Request, sink mo
 	return nil
 }
 
-func streamText(responseText string) string {
+func finalAnswerText(responseText string) string {
 	var action model.Action
 	if err := json.Unmarshal([]byte(responseText), &action); err != nil {
 		return responseText
 	}
-	if action.Action != "final" {
+	if action.Action != "final" || strings.TrimSpace(action.Answer) == "" {
 		return responseText
 	}
-	return strings.TrimPrefix(action.Answer, "mock response: ")
+	return action.Answer
 }
 
 func splitStreamChunks(text string) []string {
