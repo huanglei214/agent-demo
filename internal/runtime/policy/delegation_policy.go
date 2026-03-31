@@ -17,10 +17,6 @@ func (DelegationPolicy) BeforeRun(context.Context, *ExecutionContext) (*PolicyOu
 	return Continue(), nil
 }
 
-func (DelegationPolicy) BeforeModel(context.Context, *ExecutionContext) (*PolicyOutcome, error) {
-	return Continue(), nil
-}
-
 func (p DelegationPolicy) AfterModel(ctx context.Context, exec *ExecutionContext, action *model.Action) (*PolicyOutcome, error) {
 	if exec == nil || action == nil || action.Action != "delegate" || exec.CurrentStep == nil || p.Manager == nil {
 		return Continue(), nil
@@ -38,9 +34,5 @@ func (p DelegationPolicy) AfterModel(ctx context.Context, exec *ExecutionContext
 }
 
 func (DelegationPolicy) AfterAction(context.Context, *ExecutionContext, model.Action, ActionResult) (*PolicyOutcome, error) {
-	return Continue(), nil
-}
-
-func (DelegationPolicy) BeforeFinish(context.Context, *ExecutionContext) (*PolicyOutcome, error) {
 	return Continue(), nil
 }

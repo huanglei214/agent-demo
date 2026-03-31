@@ -218,6 +218,7 @@ func TestStartRunWithPostToolFollowUpDelegatesThroughDelegationPath(t *testing.T
 		Provider:    "mock",
 		Model:       "mock-model",
 		MaxTurns:    5,
+		PlanMode:    harnessruntime.PlanModeNone,
 	})
 	if err != nil {
 		t.Fatalf("start run with post-tool delegation: %v", err)

@@ -3,6 +3,7 @@ package prompt
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -150,6 +151,7 @@ func historicalWorkingEvidenceForFollowUp(toolResults []harnessruntime.ToolCallR
 	for toolName, rawEntries := range workingEvidence {
 		entries, ok := normalizeWorkingEvidenceEntries(rawEntries)
 		if !ok {
+			slog.Warn("working evidence normalization failed, preserving original", "tool", toolName, "type", fmt.Sprintf("%T", rawEntries))
 			return workingEvidence
 		}
 

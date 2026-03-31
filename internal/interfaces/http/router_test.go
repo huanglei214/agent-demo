@@ -418,6 +418,12 @@ func TestAGUIChatDisconnectDoesNotFailRun(t *testing.T) {
 	if inspection.Run.Status != harnessruntime.RunCompleted {
 		t.Fatalf("expected unwritable AG-UI stream to complete run, got %#v", inspection.Run)
 	}
+	// Allow trailing I/O to flush: the AGUI handler runs the agent in a background
+	// goroutine and drains remaining events asynchronously after stream disconnect.
+	// Even after the run reaches terminal state, late event store writes and the
+	// drainRunCompletion goroutine may still be in-flight. Wait long enough for
+	// them to finish before t.TempDir() cleanup removes the workspace.
+	time.Sleep(200 * time.Millisecond)
 }
 
 func TestAGUIChatEndpointRejectsInvalidJSON(t *testing.T) {

@@ -513,3 +513,158 @@ func TestGenerateLimitsConcurrentRequests(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateStreamHandlesContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	provider := New(config.ModelConfig{
+		Ark: config.ArkConfig{
+			APIKey:  "test-key",
+			BaseURL: "https://ark.example.com",
+			ModelID: "ark-test",
+		},
+	})
+	provider.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		}),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	sink := &capturingStreamSink{}
+	err := provider.GenerateStream(ctx, model.Request{Input: "hello"}, sink)
+	if err == nil {
+		t.Fatal("expected error on cancelled context")
+	}
+	if sink.started != 0 {
+		t.Fatalf("expected no sink start on cancelled context, got started=%d", sink.started)
+	}
+}
+
+func TestGenerateStreamHandlesEmptyChunks(t *testing.T) {
+	t.Parallel()
+
+	provider := New(config.ModelConfig{
+		Ark: config.ArkConfig{
+			APIKey:  "test-key",
+			BaseURL: "https://ark.example.com",
+			ModelID: "ark-test",
+		},
+	})
+	provider.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+					streamChunk(t, "hello", nil),
+					"",
+					streamChunk(t, "", nil),
+					"",
+					streamChunk(t, "", nil),
+					"",
+					streamChunk(t, " world", "stop"),
+					"",
+					"data: [DONE]",
+					"",
+				}, "\n"))),
+			}, nil
+		}),
+	}
+
+	sink := &capturingStreamSink{}
+	if err := provider.GenerateStream(context.Background(), model.Request{Input: "test"}, sink); err != nil {
+		t.Fatalf("generate stream: %v", err)
+	}
+	if got := sink.deltas; len(got) != 2 || got[0] != "hello" || got[1] != " world" {
+		t.Fatalf("expected empty chunks to be skipped, got deltas %#v", got)
+	}
+}
+
+func TestGenerateStreamHandlesUnicodeEscapeInAnswer(t *testing.T) {
+	t.Parallel()
+
+	provider := New(config.ModelConfig{
+		Ark: config.ArkConfig{
+			APIKey:  "test-key",
+			BaseURL: "https://ark.example.com",
+			ModelID: "ark-test",
+		},
+	})
+	provider.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+					streamChunk(t, `{"action":"final","answer":"\u4f60\u597d"}`, "stop"),
+					"",
+					"data: [DONE]",
+					"",
+				}, "\n"))),
+			}, nil
+		}),
+	}
+
+	sink := &capturingStreamSink{}
+	if err := provider.GenerateStream(context.Background(), model.Request{Input: "test"}, sink); err != nil {
+		t.Fatalf("generate stream: %v", err)
+	}
+	if sink.started != 1 || sink.completed != 1 {
+		t.Fatalf("unexpected sink lifecycle: started=%d completed=%d", sink.started, sink.completed)
+	}
+	combined := strings.Join(sink.deltas, "")
+	if combined != "你好" {
+		t.Fatalf("expected unicode answer '你好', got %q", combined)
+	}
+}
+
+func TestGenerateStreamHandlesIncompleteJSONAnswerField(t *testing.T) {
+	t.Parallel()
+
+	provider := New(config.ModelConfig{
+		Ark: config.ArkConfig{
+			APIKey:  "test-key",
+			BaseURL: "https://ark.example.com",
+			ModelID: "ark-test",
+		},
+	})
+	// Stream returns JSON with "action":"final" but answer field never closes.
+	// The incremental parser emits partial answer "he" during streaming.
+	// Post-stream, finalAnswerText rejects the incomplete JSON, resulting in
+	// NonFinalStreamResponseError.
+	provider.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+					streamChunk(t, `{"action":"final","answer":"he`, "stop"),
+					"",
+					"data: [DONE]",
+					"",
+				}, "\n"))),
+			}, nil
+		}),
+	}
+
+	sink := &capturingStreamSink{}
+	err := provider.GenerateStream(context.Background(), model.Request{Input: "test"}, sink)
+	var nonFinal *model.NonFinalStreamResponseError
+	if !errors.As(err, &nonFinal) {
+		t.Fatalf("expected NonFinalStreamResponseError for incomplete JSON, got %v", err)
+	}
+	// Partial answer "he" was emitted during streaming before post-stream validation failed.
+	if sink.started != 1 {
+		t.Fatalf("expected sink started (partial answer emitted), got started=%d", sink.started)
+	}
+	if len(sink.deltas) < 1 || sink.deltas[0] != "he" {
+		t.Fatalf("expected first delta to be partial answer 'he', got %#v", sink.deltas)
+	}
+}

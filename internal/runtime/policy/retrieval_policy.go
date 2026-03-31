@@ -15,10 +15,6 @@ func (RetrievalPolicy) BeforeRun(context.Context, *ExecutionContext) (*PolicyOut
 	return Continue(), nil
 }
 
-func (RetrievalPolicy) BeforeModel(context.Context, *ExecutionContext) (*PolicyOutcome, error) {
-	return Continue(), nil
-}
-
 func (RetrievalPolicy) AfterModel(context.Context, *ExecutionContext, *model.Action) (*PolicyOutcome, error) {
 	return Continue(), nil
 }
@@ -37,8 +33,4 @@ func (RetrievalPolicy) AfterAction(_ context.Context, exec *ExecutionContext, ac
 		Decision: DecisionForceFinal,
 		Reason:   decision.Reason,
 	}, nil
-}
-
-func (RetrievalPolicy) BeforeFinish(context.Context, *ExecutionContext) (*PolicyOutcome, error) {
-	return Continue(), nil
 }

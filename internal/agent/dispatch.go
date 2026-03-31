@@ -265,7 +265,7 @@ func (e *Executor) runToolBatch(runCtx context.Context, exec *runExecution, call
 func (e *Executor) maybeCompactContext(exec *runExecution, recentEvents []harnessruntime.Event, toolResults []harnessruntime.ToolCallResult) error {
 	shouldCompact, reason := e.ContextManager.ShouldCompact(harnesscontext.CompactionCheckInput{
 		TokenUsage:       exec.lastPromptBytes,
-		TokenBudget:      1600,
+		TokenBudget:      e.Config.Agent.TokenBudget,
 		RecentEventCount: len(recentEvents),
 		LastToolBytes:    totalToolBytes(toolResults),
 	})
@@ -581,6 +581,11 @@ type toolExecutionError struct {
 }
 
 func (e *Executor) executeToolCalls(ctx context.Context, toolCallIDs []string, calls []model.ToolCall) ([]harnessruntime.ToolCallResult, []toolExecutionError) {
+	if timeout := time.Duration(e.Config.Agent.ToolBatchTimeoutSecs) * time.Second; timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	if e.canExecuteToolBatchInParallel(calls) {
 		return e.executeToolCallsParallel(ctx, toolCallIDs, calls)
 	}
@@ -609,10 +614,17 @@ func (e *Executor) executeToolCallsSerial(ctx context.Context, toolCallIDs []str
 func (e *Executor) executeToolCallsParallel(ctx context.Context, toolCallIDs []string, calls []model.ToolCall) ([]harnessruntime.ToolCallResult, []toolExecutionError) {
 	results := make([]harnessruntime.ToolCallResult, len(calls))
 	failures := make([]toolExecutionError, len(calls))
+	maxParallel := e.Config.Agent.MaxParallelTools
+	if maxParallel <= 0 {
+		maxParallel = 8
+	}
+	sem := make(chan struct{}, maxParallel)
 	var wg sync.WaitGroup
 	for i, call := range calls {
+		sem <- struct{}{}
 		wg.Add(1)
 		go func(i int, call model.ToolCall) {
+			defer func() { <-sem }()
 			defer wg.Done()
 			result, err := e.ToolExecutor.Execute(ctx, call.Tool, call.Input)
 			if err != nil {

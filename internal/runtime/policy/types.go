@@ -79,9 +79,7 @@ type PolicyDecision string
 const (
 	DecisionContinue   PolicyDecision = "continue"
 	DecisionBlock      PolicyDecision = "block"
-	DecisionWaitUser   PolicyDecision = "wait_user"
 	DecisionReplan     PolicyDecision = "replan"
-	DecisionRewrite    PolicyDecision = "rewrite_action"
 	DecisionForceFinal PolicyDecision = "force_final"
 )
 
@@ -96,8 +94,6 @@ type PolicyOutcome struct {
 type RuntimePolicy interface {
 	Name() string
 	BeforeRun(ctx context.Context, exec *ExecutionContext) (*PolicyOutcome, error)
-	BeforeModel(ctx context.Context, exec *ExecutionContext) (*PolicyOutcome, error)
 	AfterModel(ctx context.Context, exec *ExecutionContext, action *model.Action) (*PolicyOutcome, error)
 	AfterAction(ctx context.Context, exec *ExecutionContext, action model.Action, result ActionResult) (*PolicyOutcome, error)
-	BeforeFinish(ctx context.Context, exec *ExecutionContext) (*PolicyOutcome, error)
 }

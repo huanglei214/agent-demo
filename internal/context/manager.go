@@ -23,7 +23,6 @@ type ModelContext struct {
 	Plan      []Item         `json:"plan"`
 	Memories  []Item         `json:"memories"`
 	Summaries []Item         `json:"summaries"`
-	Recent    []Item         `json:"recent"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
@@ -31,6 +30,7 @@ type BuildInput struct {
 	Task         harnessruntime.Task
 	Plan         harnessruntime.Plan
 	CurrentStep  *harnessruntime.PlanStep
+	StepResults  map[string]string
 	RecentEvents []harnessruntime.Event
 	Summaries    []harnessruntime.Summary
 	Memories     []harnessruntime.MemoryEntry
@@ -81,14 +81,23 @@ func (m Manager) Build(input BuildInput) ModelContext {
 		{
 			Kind:    "plan",
 			Title:   "Plan",
-			Content: fmt.Sprintf("plan_id=%s version=%d goal=%s", input.Plan.ID, input.Plan.Version, input.Plan.Goal),
+			Content: fmt.Sprintf("plan_id=%s version=%d goal=%s steps=%d", input.Plan.ID, input.Plan.Version, input.Plan.Goal, len(input.Plan.Steps)),
 		},
 	}
-	if input.CurrentStep != nil {
+	for i, step := range input.Plan.Steps {
+		marker := ""
+		if input.CurrentStep != nil && step.ID == input.CurrentStep.ID {
+			marker = " [CURRENT]"
+		}
+		content := fmt.Sprintf("step_id=%s title=%s status=%s%s", step.ID, step.Title, step.Status, marker)
+		if result, ok := input.StepResults[step.ID]; ok && result != "" {
+			summary := summarizeConversationText(result, 300)
+			content += fmt.Sprintf(" result=%s", summary)
+		}
 		planItems = append(planItems, Item{
 			Kind:    "step",
-			Title:   "Active Step",
-			Content: fmt.Sprintf("step_id=%s title=%s status=%s description=%s", input.CurrentStep.ID, input.CurrentStep.Title, input.CurrentStep.Status, input.CurrentStep.Description),
+			Title:   fmt.Sprintf("Step %d/%d", i+1, len(input.Plan.Steps)),
+			Content: content,
 		})
 	}
 
@@ -116,26 +125,12 @@ func (m Manager) Build(input BuildInput) ModelContext {
 		})
 	}
 
-	recentItems := make([]Item, 0, len(input.RecentEvents))
-	start := 0
-	if len(input.RecentEvents) > 5 {
-		start = len(input.RecentEvents) - 5
-	}
-	for _, event := range input.RecentEvents[start:] {
-		recentItems = append(recentItems, Item{
-			Kind:    "event",
-			Title:   event.Type,
-			Content: fmt.Sprintf("actor=%s sequence=%d", event.Actor, event.Sequence),
-		})
-	}
-
 	return ModelContext{
 		Pinned:    pinned,
 		Messages:  messageItems,
 		Plan:      planItems,
 		Memories:  memoryItems,
 		Summaries: summaryItems,
-		Recent:    recentItems,
 		Metadata: map[string]any{
 			"pinned_count":         len(pinned),
 			"message_count":        len(messageItems),
@@ -144,7 +139,6 @@ func (m Manager) Build(input BuildInput) ModelContext {
 			"plan_count":           len(planItems),
 			"memory_count":         len(memoryItems),
 			"summary_count":        len(summaryItems),
-			"recent_count":         len(recentItems),
 		},
 	}
 }

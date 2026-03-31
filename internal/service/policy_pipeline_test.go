@@ -40,10 +40,6 @@ func (p *countingNoopRuntimePolicy) BeforeRun(context.Context, *policy.Execution
 	return policy.Continue(), nil
 }
 
-func (*countingNoopRuntimePolicy) BeforeModel(context.Context, *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
-	return policy.Continue(), nil
-}
-
 func (p *countingNoopRuntimePolicy) AfterModel(context.Context, *policy.ExecutionContext, *model.Action) (*policy.PolicyOutcome, error) {
 	p.afterModelCount.Add(1)
 	return policy.Continue(), nil
@@ -53,17 +49,9 @@ func (*countingNoopRuntimePolicy) AfterAction(context.Context, *policy.Execution
 	return policy.Continue(), nil
 }
 
-func (*countingNoopRuntimePolicy) BeforeFinish(context.Context, *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
-	return policy.Continue(), nil
-}
-
 func (*mutatingActionNoopPolicy) Name() string { return "mutating-action-noop" }
 
 func (*mutatingActionNoopPolicy) BeforeRun(context.Context, *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
-	return policy.Continue(), nil
-}
-
-func (*mutatingActionNoopPolicy) BeforeModel(context.Context, *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
 	return policy.Continue(), nil
 }
 
@@ -78,17 +66,9 @@ func (*mutatingActionNoopPolicy) AfterAction(context.Context, *policy.ExecutionC
 	return policy.Continue(), nil
 }
 
-func (*mutatingActionNoopPolicy) BeforeFinish(context.Context, *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
-	return policy.Continue(), nil
-}
-
 func (*mutatingAfterActionNoopPolicy) Name() string { return "mutating-after-action-noop" }
 
 func (*mutatingAfterActionNoopPolicy) BeforeRun(context.Context, *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
-	return policy.Continue(), nil
-}
-
-func (*mutatingAfterActionNoopPolicy) BeforeModel(context.Context, *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
 	return policy.Continue(), nil
 }
 
@@ -110,15 +90,7 @@ func (*mutatingAfterActionNoopPolicy) AfterAction(_ context.Context, _ *policy.E
 	return policy.Continue(), nil
 }
 
-func (*mutatingAfterActionNoopPolicy) BeforeFinish(context.Context, *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
-	return policy.Continue(), nil
-}
-
 func (*mutatingContextNoopPolicy) Name() string { return "mutating-context-noop" }
-
-func (*mutatingContextNoopPolicy) BeforeModel(context.Context, *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
-	return policy.Continue(), nil
-}
 
 func (p *mutatingContextNoopPolicy) BeforeRun(_ context.Context, execCtx *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
 	if execCtx.Plan != nil {
@@ -157,10 +129,6 @@ func (p *mutatingContextNoopPolicy) AfterModel(_ context.Context, execCtx *polic
 }
 
 func (*mutatingContextNoopPolicy) AfterAction(context.Context, *policy.ExecutionContext, model.Action, policy.ActionResult) (*policy.PolicyOutcome, error) {
-	return policy.Continue(), nil
-}
-
-func (*mutatingContextNoopPolicy) BeforeFinish(context.Context, *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
 	return policy.Continue(), nil
 }
 

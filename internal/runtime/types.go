@@ -231,16 +231,17 @@ type DelegationArtifact struct {
 }
 
 type RunState struct {
-	RunID              string           `json:"run_id"`
-	CurrentStepID      string           `json:"current_step_id,omitempty"`
-	TurnCount          int              `json:"turn_count"`
-	LastEventID        string           `json:"last_event_id,omitempty"`
-	ResumePhase        string           `json:"resume_phase,omitempty"`
-	PendingToolName    string           `json:"pending_tool_name,omitempty"`
-	PendingToolResult  map[string]any   `json:"pending_tool_result,omitempty"`
-	PendingToolResults []ToolCallResult `json:"pending_tool_results,omitempty"`
-	Todos              []TodoItem       `json:"todos,omitempty"`
-	UpdatedAt          time.Time        `json:"updated_at"`
+	RunID              string            `json:"run_id"`
+	CurrentStepID      string            `json:"current_step_id,omitempty"`
+	TurnCount          int               `json:"turn_count"`
+	StepResults        map[string]string `json:"step_results,omitempty"`
+	LastEventID        string            `json:"last_event_id,omitempty"`
+	ResumePhase        string            `json:"resume_phase,omitempty"`
+	PendingToolName    string            `json:"pending_tool_name,omitempty"`
+	PendingToolResult  map[string]any    `json:"pending_tool_result,omitempty"`
+	PendingToolResults []ToolCallResult  `json:"pending_tool_results,omitempty"`
+	Todos              []TodoItem        `json:"todos,omitempty"`
+	UpdatedAt          time.Time         `json:"updated_at"`
 }
 
 type RunResult struct {

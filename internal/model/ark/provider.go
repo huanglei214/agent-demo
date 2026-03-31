@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -186,6 +187,14 @@ func (p Provider) Generate(ctx context.Context, req internalmodel.Request) (inte
 	}, nil
 }
 
+type streamMode int
+
+const (
+	streamModeUnknown    streamMode = iota
+	streamModePlainText             // non-JSON response, emit deltas directly
+	streamModeStructured            // JSON response, parse answer field incrementally
+)
+
 func (p Provider) GenerateStream(ctx context.Context, req internalmodel.Request, sink internalmodel.StreamSink) error {
 	if p.config.Ark.APIKey == "" || p.config.Ark.BaseURL == "" || p.config.Ark.ModelID == "" {
 		return &Error{
@@ -232,11 +241,10 @@ func (p Provider) GenerateStream(ctx context.Context, req internalmodel.Request,
 	}
 
 	var (
-		started       bool
-		modeKnown     bool
-		structured    bool
-		emittedAnswer string
-		fullResponse  strings.Builder
+		mode         streamMode
+		sinkStarted  bool
+		emittedLen   int
+		fullResponse strings.Builder
 	)
 	for {
 		chunk, recvErr := stream.Recv()
@@ -244,7 +252,7 @@ func (p Provider) GenerateStream(ctx context.Context, req internalmodel.Request,
 			if errors.Is(recvErr, io.EOF) {
 				break
 			}
-			if started {
+			if sinkStarted {
 				_ = sink.Fail(recvErr)
 			}
 			return classifySDKError(ctx, recvErr)
@@ -258,21 +266,22 @@ func (p Provider) GenerateStream(ctx context.Context, req internalmodel.Request,
 				continue
 			}
 			fullResponse.WriteString(delta)
-			if !modeKnown {
+			if mode == streamModeUnknown {
 				trimmed := strings.TrimSpace(fullResponse.String())
 				if trimmed == "" {
 					continue
 				}
-				modeKnown = true
-				structured = strings.HasPrefix(trimmed, "{")
-				if !structured {
+				if strings.HasPrefix(trimmed, "{") {
+					mode = streamModeStructured
+				} else {
+					mode = streamModePlainText
 					if err := sink.Start(); err != nil {
 						return err
 					}
-					started = true
+					sinkStarted = true
 				}
 			}
-			if !structured {
+			if mode == streamModePlainText {
 				if err := sink.Delta(delta); err != nil {
 					return err
 				}
@@ -287,26 +296,27 @@ func (p Provider) GenerateStream(ctx context.Context, req internalmodel.Request,
 			if !answerFound {
 				continue
 			}
-			if !started {
+			if !sinkStarted {
 				if err := sink.Start(); err != nil {
 					return err
 				}
-				started = true
+				sinkStarted = true
 			}
-			if len(answer) > len(emittedAnswer) {
-				suffix := answer[len(emittedAnswer):]
+			if len(answer) > emittedLen {
+				suffix := answer[emittedLen:]
 				if suffix != "" {
 					if err := sink.Delta(suffix); err != nil {
 						return err
 					}
 				}
-				emittedAnswer = answer
+				emittedLen = len(answer)
 			}
 		}
 	}
 
 	responseText := fullResponse.String()
 	if responseText == "" {
+		slog.Warn("ark: stream returned empty response, falling back to synchronous Generate")
 		resp, err := p.Generate(ctx, req)
 		if err != nil {
 			return err
@@ -314,25 +324,25 @@ func (p Provider) GenerateStream(ctx context.Context, req internalmodel.Request,
 		responseText = resp.Text
 	}
 
-	if !modeKnown || structured {
+	if mode != streamModePlainText {
 		text, final := finalAnswerText(responseText)
 		if !final {
 			return &internalmodel.NonFinalStreamResponseError{Response: internalmodel.Response{Text: responseText, FinishReason: "stop"}}
 		}
-		if !started {
+		if !sinkStarted {
 			if err := sink.Start(); err != nil {
 				return err
 			}
-			started = true
+			sinkStarted = true
 		}
-		if len(text) > len(emittedAnswer) {
-			suffix := text[len(emittedAnswer):]
+		if len(text) > emittedLen {
+			suffix := text[emittedLen:]
 			if suffix != "" {
 				if err := sink.Delta(suffix); err != nil {
 					return err
 				}
 			}
-			emittedAnswer = text
+			emittedLen = len(text)
 		}
 	}
 	return sink.Complete()
@@ -437,7 +447,7 @@ value:
 func finalAnswerText(responseText string) (string, bool) {
 	var action internalmodel.Action
 	if err := json.Unmarshal([]byte(responseText), &action); err != nil {
-		return responseText, true
+		return "", false
 	}
 	if action.Action != "final" || strings.TrimSpace(action.Answer) == "" {
 		return responseText, false

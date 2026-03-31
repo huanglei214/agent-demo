@@ -3,6 +3,7 @@ type MessageBubbleProps = {
   roleLabel: string;
   avatarLabel: string;
   content: string;
+  isTyping?: boolean;
   onDebug?: () => void;
 };
 
@@ -11,6 +12,7 @@ export function MessageBubble({
   roleLabel,
   avatarLabel,
   content,
+  isTyping,
   onDebug,
 }: MessageBubbleProps) {
   const paragraphs = splitIntoParagraphs(content);
@@ -24,7 +26,7 @@ export function MessageBubble({
         <div className="flex items-center gap-2 mb-1">
           <span className="chat-bubble-role m-0">{roleLabel}</span>
           {role === "assistant" && onDebug && (
-            <button 
+            <button
               onClick={onDebug}
               className="opacity-0 group-hover/bubble:opacity-100 transition-opacity text-white/40 hover:text-white/80 p-1.5 rounded bg-white/5 hover:bg-white/10"
               title="Debug Run"
@@ -42,14 +44,28 @@ export function MessageBubble({
               : "chat-bubble chat-bubble-assistant bg-white/[0.02] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
           }
         >
-          <div className={role === "assistant" ? "space-y-3 text-[1.02rem] leading-8 text-zinc-100" : "space-y-2 leading-7"}>
-            {paragraphs.map((paragraph, index) => (
-              <p key={index}>{paragraph}</p>
-            ))}
-          </div>
+          {isTyping && !content ? (
+            <TypingIndicator />
+          ) : (
+            <div className={role === "assistant" ? "space-y-3 text-[1.02rem] leading-8 text-zinc-100" : "space-y-2 leading-7"}>
+              {paragraphs.map((paragraph, index) => (
+                <p key={index}>{paragraph}</p>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </article>
+  );
+}
+
+function TypingIndicator() {
+  return (
+    <div className="typing-indicator" aria-label="Thinking...">
+      <span className="typing-dot" />
+      <span className="typing-dot" />
+      <span className="typing-dot" />
+    </div>
   );
 }
 

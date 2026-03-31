@@ -14,6 +14,7 @@ type Config struct {
 	Workspace string
 	Runtime   RuntimeConfig
 	Model     ModelConfig
+	Agent     AgentConfig
 }
 
 type RuntimeConfig struct {
@@ -33,6 +34,15 @@ type ArkConfig struct {
 	ModelID       string
 	TPM           int
 	MaxConcurrent int
+}
+
+type AgentConfig struct {
+	MaxSubagentTurns      int
+	ToolBatchTimeoutSecs  int
+	MaxParallelTools      int
+	DelegationTimeoutSecs int
+	TokenBudget           int
+	MemoryRecallLimit     int
 }
 
 var envPlaceholderPattern = regexp.MustCompile(`\$\{([A-Z0-9_]+)\}`)
@@ -55,6 +65,7 @@ type Overrides struct {
 type fileConfig struct {
 	Runtime *fileRuntimeConfig `json:"runtime,omitempty"`
 	Model   *fileModelConfig   `json:"model,omitempty"`
+	Agent   *fileAgentConfig   `json:"agent,omitempty"`
 }
 
 type fileRuntimeConfig struct {
@@ -74,6 +85,15 @@ type fileArkConfig struct {
 	ModelID       *string `json:"model_id,omitempty"`
 	TPM           *int    `json:"tpm,omitempty"`
 	MaxConcurrent *int    `json:"max_concurrent,omitempty"`
+}
+
+type fileAgentConfig struct {
+	MaxSubagentTurns      *int `json:"max_subagent_turns,omitempty"`
+	ToolBatchTimeoutSecs  *int `json:"tool_batch_timeout_seconds,omitempty"`
+	MaxParallelTools      *int `json:"max_parallel_tools,omitempty"`
+	DelegationTimeoutSecs *int `json:"delegation_timeout_seconds,omitempty"`
+	TokenBudget           *int `json:"token_budget,omitempty"`
+	MemoryRecallLimit     *int `json:"memory_recall_limit,omitempty"`
 }
 
 func LoadWithOverrides(workspace string, overrides Overrides) Config {
@@ -101,6 +121,14 @@ func LoadWithOverrides(workspace string, overrides Overrides) Config {
 				BaseURL: "",
 				ModelID: "",
 			},
+		},
+		Agent: AgentConfig{
+			MaxSubagentTurns:      3,
+			ToolBatchTimeoutSecs:  60,
+			MaxParallelTools:      8,
+			DelegationTimeoutSecs: 180,
+			TokenBudget:           1600,
+			MemoryRecallLimit:     5,
 		},
 	}
 
@@ -162,6 +190,26 @@ func mergeConfigFile(cfg *Config, path string, dotEnvValues map[string]string) {
 			if parsed.Model.Ark.MaxConcurrent != nil && *parsed.Model.Ark.MaxConcurrent > 0 {
 				cfg.Model.Ark.MaxConcurrent = *parsed.Model.Ark.MaxConcurrent
 			}
+		}
+	}
+	if parsed.Agent != nil {
+		if parsed.Agent.MaxSubagentTurns != nil && *parsed.Agent.MaxSubagentTurns > 0 {
+			cfg.Agent.MaxSubagentTurns = *parsed.Agent.MaxSubagentTurns
+		}
+		if parsed.Agent.ToolBatchTimeoutSecs != nil && *parsed.Agent.ToolBatchTimeoutSecs > 0 {
+			cfg.Agent.ToolBatchTimeoutSecs = *parsed.Agent.ToolBatchTimeoutSecs
+		}
+		if parsed.Agent.MaxParallelTools != nil && *parsed.Agent.MaxParallelTools > 0 {
+			cfg.Agent.MaxParallelTools = *parsed.Agent.MaxParallelTools
+		}
+		if parsed.Agent.DelegationTimeoutSecs != nil && *parsed.Agent.DelegationTimeoutSecs > 0 {
+			cfg.Agent.DelegationTimeoutSecs = *parsed.Agent.DelegationTimeoutSecs
+		}
+		if parsed.Agent.TokenBudget != nil && *parsed.Agent.TokenBudget > 0 {
+			cfg.Agent.TokenBudget = *parsed.Agent.TokenBudget
+		}
+		if parsed.Agent.MemoryRecallLimit != nil && *parsed.Agent.MemoryRecallLimit > 0 {
+			cfg.Agent.MemoryRecallLimit = *parsed.Agent.MemoryRecallLimit
 		}
 	}
 }

@@ -15,10 +15,6 @@ func (ReplanPolicy) BeforeRun(context.Context, *ExecutionContext) (*PolicyOutcom
 	return Continue(), nil
 }
 
-func (ReplanPolicy) BeforeModel(context.Context, *ExecutionContext) (*PolicyOutcome, error) {
-	return Continue(), nil
-}
-
 func (ReplanPolicy) AfterModel(context.Context, *ExecutionContext, *model.Action) (*PolicyOutcome, error) {
 	return Continue(), nil
 }
@@ -40,8 +36,4 @@ func (ReplanPolicy) AfterAction(_ context.Context, exec *ExecutionContext, actio
 		Decision: DecisionReplan,
 		Reason:   decision.Reason,
 	}, nil
-}
-
-func (ReplanPolicy) BeforeFinish(context.Context, *ExecutionContext) (*PolicyOutcome, error) {
-	return Continue(), nil
 }

@@ -1102,9 +1102,6 @@ func (afterActionMutatingPolicy) Name() string { return "after-action-mutating" 
 func (afterActionMutatingPolicy) BeforeRun(_ context.Context, _ *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
 	return policy.Continue(), nil
 }
-func (afterActionMutatingPolicy) BeforeModel(_ context.Context, _ *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
-	return policy.Continue(), nil
-}
 func (afterActionMutatingPolicy) AfterModel(_ context.Context, _ *policy.ExecutionContext, _ *model.Action) (*policy.PolicyOutcome, error) {
 	return policy.Continue(), nil
 }
@@ -1112,9 +1109,6 @@ func (afterActionMutatingPolicy) AfterAction(_ context.Context, _ *policy.Execut
 	action.Calls[0].Input["path"] = "tampered.txt"
 	result.ToolCalls[0].Input["path"] = "tampered.txt"
 	result.ToolResults[0].Result["nested"].(map[string]any)["value"] = "tampered"
-	return policy.Continue(), nil
-}
-func (afterActionMutatingPolicy) BeforeFinish(_ context.Context, _ *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
 	return policy.Continue(), nil
 }
 
@@ -1130,9 +1124,6 @@ func (p *countingAfterModelPolicy) Name() string { return p.name }
 func (*countingAfterModelPolicy) BeforeRun(_ context.Context, _ *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
 	return policy.Continue(), nil
 }
-func (*countingAfterModelPolicy) BeforeModel(_ context.Context, _ *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
-	return policy.Continue(), nil
-}
 func (p *countingAfterModelPolicy) AfterModel(_ context.Context, _ *policy.ExecutionContext, _ *model.Action) (*policy.PolicyOutcome, error) {
 	p.afterModelCalls++
 	return p.outcome, nil
@@ -1140,15 +1131,9 @@ func (p *countingAfterModelPolicy) AfterModel(_ context.Context, _ *policy.Execu
 func (*countingAfterModelPolicy) AfterAction(_ context.Context, _ *policy.ExecutionContext, _ model.Action, _ policy.ActionResult) (*policy.PolicyOutcome, error) {
 	return policy.Continue(), nil
 }
-func (*countingAfterModelPolicy) BeforeFinish(_ context.Context, _ *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
-	return policy.Continue(), nil
-}
 
 func (afterModelBlockingPolicy) Name() string { return "after-model-blocking" }
 func (afterModelBlockingPolicy) BeforeRun(_ context.Context, _ *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
-	return policy.Continue(), nil
-}
-func (afterModelBlockingPolicy) BeforeModel(_ context.Context, _ *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
 	return policy.Continue(), nil
 }
 func (afterModelBlockingPolicy) AfterModel(_ context.Context, _ *policy.ExecutionContext, _ *model.Action) (*policy.PolicyOutcome, error) {
@@ -1158,8 +1143,5 @@ func (afterModelBlockingPolicy) AfterModel(_ context.Context, _ *policy.Executio
 	}, nil
 }
 func (afterModelBlockingPolicy) AfterAction(_ context.Context, _ *policy.ExecutionContext, _ model.Action, _ policy.ActionResult) (*policy.PolicyOutcome, error) {
-	return policy.Continue(), nil
-}
-func (afterModelBlockingPolicy) BeforeFinish(_ context.Context, _ *policy.ExecutionContext) (*policy.PolicyOutcome, error) {
 	return policy.Continue(), nil
 }

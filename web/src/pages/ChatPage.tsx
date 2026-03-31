@@ -501,6 +501,7 @@ export function ChatPage({
                     message.content ||
                     (message.id === latestAssistant?.id && sending ? copy.common.loading : "")
                   }
+                  isTyping={message.role === "assistant" && message.id === latestAssistant?.id && sending && !message.content}
                     onDebug={message.runId ? () => setDebugRunId(message.runId!) : undefined}
                   />
                 ))}

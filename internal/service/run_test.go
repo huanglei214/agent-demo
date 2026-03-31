@@ -1027,7 +1027,8 @@ func TestStartRunEmitsTodoUpdatedEvent(t *testing.T) {
 			return &actionSequenceModel{
 				responses: []model.Action{
 					{Action: "todo", Todo: &model.TodoAction{Operation: "set", Items: []harnessruntime.TodoItem{{ID: "todo_1", Content: "Read README", Status: harnessruntime.TodoPending, Priority: 1}}}},
-					{Action: "final", Answer: "done"},
+					{Action: "final", Answer: "step 1 done"},
+					{Action: "final", Answer: "all done"},
 				},
 			}, nil
 		}
@@ -1283,6 +1284,7 @@ func TestStartRunExecutesBatchedToolCallsInOrder(t *testing.T) {
 		Provider:    "mock",
 		Model:       "mock-model",
 		MaxTurns:    4,
+		PlanMode:    harnessruntime.PlanModeNone,
 	})
 	if err != nil {
 		t.Fatalf("start run: %v", err)
@@ -2086,5 +2088,115 @@ func (m *batchWriteReadModel) Generate(ctx context.Context, req model.Request) (
 		}, nil
 	default:
 		return model.Response{}, errors.New("batchWriteReadModel exhausted")
+	}
+}
+
+func TestStartRunWithTodoModeAdvancesThroughMultipleSteps(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+
+	services := newTestServices(t, config.Load(workspace), func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return &actionSequenceModel{
+				responses: []model.Action{
+					{Action: "final", Answer: "step 1: files read"},
+					{Action: "final", Answer: "step 2: analysis done"},
+					{Action: "final", Answer: "step 3: here is the summary"},
+				},
+			}, nil
+		}
+	})
+
+	response, err := services.StartRun(context.Background(), RunRequest{
+		Instruction: "1. Read the important files\n2. Analyze the code\n3. Summarize the project",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    10,
+		PlanMode:    harnessruntime.PlanModeTodo,
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if response.Run.Status != harnessruntime.RunCompleted {
+		t.Fatalf("expected completed run, got %s", response.Run.Status)
+	}
+	if response.Result == nil || !strings.Contains(response.Result.Output, "step 3") {
+		t.Fatalf("expected final output from last step, got %q", response.Result.Output)
+	}
+
+	// Verify step events were emitted.
+	events, err := services.EventStore.ReadAll(response.Run.ID)
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	stepStartedCount := 0
+	stepCompletedCount := 0
+	for _, ev := range events {
+		switch ev.Type {
+		case "plan.step.started":
+			stepStartedCount++
+		case "plan.step.completed":
+			stepCompletedCount++
+		}
+	}
+	// 1 initial step.started (from activateRun) + 2 from advanceToNextStep = 3 step.started
+	// 2 from advanceToNextStep + 1 from completeRun = 3 step.completed
+	if stepStartedCount < 3 {
+		t.Fatalf("expected at least 3 step.started events, got %d", stepStartedCount)
+	}
+	if stepCompletedCount < 3 {
+		t.Fatalf("expected at least 3 step.completed events, got %d", stepCompletedCount)
+	}
+}
+
+func TestStartRunWithTodoModePreservesStepResults(t *testing.T) {
+	t.Setenv("HARNESS_PROVIDER", "mock")
+	workspace := t.TempDir()
+
+	services := newTestServices(t, config.Load(workspace), func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return &actionSequenceModel{
+				responses: []model.Action{
+					{Action: "final", Answer: "step 1 result: found 3 files"},
+					{Action: "final", Answer: "step 2 result: all good"},
+				},
+			}, nil
+		}
+	})
+
+	response, err := services.StartRun(context.Background(), RunRequest{
+		Instruction: "1. Read files\n2. Summarize findings",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    10,
+		PlanMode:    harnessruntime.PlanModeTodo,
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if response.Run.Status != harnessruntime.RunCompleted {
+		t.Fatalf("expected completed run, got %s", response.Run.Status)
+	}
+
+	// Verify step results are persisted in state.
+	state, err := services.StateStore.LoadState(response.Run.ID)
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(state.StepResults) == 0 {
+		t.Fatal("expected step results to be persisted in state")
+	}
+	// First step's result should be recorded.
+	foundStepResult := false
+	for _, result := range state.StepResults {
+		if strings.Contains(result, "step 1 result") {
+			foundStepResult = true
+			break
+		}
+	}
+	if !foundStepResult {
+		t.Fatalf("expected first step result to be preserved, got %v", state.StepResults)
 	}
 }

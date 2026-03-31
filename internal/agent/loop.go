@@ -37,6 +37,7 @@ type runExecution struct {
 	sequence                 harnessruntime.SequenceCursor
 	turnCount                int
 	finalAnswer              string
+	stepResults              map[string]string
 	observer                 RunObserver
 	provider                 model.Model
 	mode                     policy.ExecutionMode
@@ -416,6 +417,17 @@ func (e *Executor) ExecuteRun(ctx context.Context, task harnessruntime.Task, ses
 			if strings.TrimSpace(exec.finalAnswer) == "" {
 				return e.failRun(exec.run, exec.plan, exec.task.ID, exec.session.ID, exec.state, errors.New("model returned an empty final answer"), exec.nextSequence(), exec.observer)
 			}
+			hasNext, err := e.advanceToNextStep(runCtx, exec)
+			if err != nil {
+				return ExecutionResponse{}, err
+			}
+			if hasNext {
+				action, err = e.resolveInitialAction(runCtx, exec, false)
+				if err != nil {
+					return ExecutionResponse{}, err
+				}
+				continue
+			}
 			return e.completeRun(exec)
 		default:
 			return e.failRun(exec.run, exec.plan, exec.task.ID, exec.session.ID, exec.state, errors.New("model returned an unsupported action"), exec.nextSequence(), exec.observer)
@@ -465,7 +477,7 @@ func (e *Executor) loadExecutionContext(exec *runExecution) error {
 	recalledMemories, err := e.MemoryManager.Recall(memory.RecallQuery{
 		SessionID: exec.session.ID,
 		Goal:      exec.task.Instruction,
-		Limit:     5,
+		Limit:     e.Config.Agent.MemoryRecallLimit,
 	})
 	if err != nil {
 		return err
@@ -498,6 +510,7 @@ func (e *Executor) resolveInitialAction(runCtx context.Context, exec *runExecuti
 		Task:         exec.task,
 		Plan:         exec.plan,
 		CurrentStep:  exec.currentStep,
+		StepResults:  exec.stepResults,
 		RecentEvents: recentEvents,
 		Summaries:    exec.summaries,
 		Memories:     exec.recalledMemories,
@@ -525,7 +538,6 @@ func (e *Executor) resolveInitialAction(runCtx context.Context, exec *runExecuti
 			"message_count": len(recentMessages),
 			"memory_count":  len(exec.recalledMemories),
 			"summary_count": len(exec.summaries),
-			"recent_count":  len(modelContext.Recent),
 		}),
 	}
 	if err := e.appendEvents(preModelEvents, exec.observer); err != nil {
@@ -694,6 +706,100 @@ func (e *Executor) completeRun(exec *runExecution) (ExecutionResponse, error) {
 		Run:    exec.run,
 		Result: &result,
 	}, nil
+}
+
+// advanceToNextStep checks if there is a next pending step in the plan.
+// If yes, it completes the current step, records its result, advances to the
+// next step, and returns (true, nil). If no more steps, returns (false, nil).
+func (e *Executor) advanceToNextStep(ctx context.Context, exec *runExecution) (bool, error) {
+	_ = ctx
+
+	// Only advance if there are multiple steps.
+	if len(exec.plan.Steps) <= 1 {
+		return false, nil
+	}
+
+	// Find current step index.
+	currentIdx := -1
+	for i := range exec.plan.Steps {
+		if exec.plan.Steps[i].ID == exec.currentStep.ID {
+			currentIdx = i
+			break
+		}
+	}
+	if currentIdx < 0 {
+		return false, nil
+	}
+
+	// Find next pending step.
+	nextIdx := -1
+	for i := currentIdx + 1; i < len(exec.plan.Steps); i++ {
+		if exec.plan.Steps[i].Status == harnessruntime.StepPending {
+			nextIdx = i
+			break
+		}
+	}
+	if nextIdx < 0 {
+		return false, nil
+	}
+
+	// Record current step result.
+	if exec.stepResults == nil {
+		exec.stepResults = map[string]string{}
+	}
+	exec.stepResults[exec.currentStep.ID] = exec.finalAnswer
+	if exec.state.StepResults == nil {
+		exec.state.StepResults = map[string]string{}
+	}
+	exec.state.StepResults[exec.currentStep.ID] = exec.finalAnswer
+
+	// Complete current step.
+	exec.currentStep.Status = harnessruntime.StepCompleted
+	stepCompletedSeq := exec.nextSequence()
+
+	// Advance to next step.
+	exec.currentStep = &exec.plan.Steps[nextIdx]
+	exec.currentStep.Status = harnessruntime.StepRunning
+	exec.run.CurrentStepID = exec.currentStep.ID
+	exec.state.CurrentStepID = exec.currentStep.ID
+	now := time.Now()
+	exec.plan.UpdatedAt = now
+	exec.run.UpdatedAt = now
+	exec.state.UpdatedAt = now
+
+	// Clear step-local state for the new step.
+	exec.finalAnswer = ""
+	exec.workingEvidence = nil
+	exec.retrievalProgress = retrieval.RetrievalProgress{}
+
+	// Persist state.
+	if err := e.StateStore.SavePlan(exec.plan); err != nil {
+		return false, err
+	}
+	if err := e.StateStore.SaveRun(exec.run); err != nil {
+		return false, err
+	}
+	if err := e.StateStore.SaveState(exec.state); err != nil {
+		return false, err
+	}
+
+	// Emit step transition events.
+	stepStartedSeq := exec.nextSequence()
+	events := []harnessruntime.Event{
+		e.newEvent(exec.run, exec.task.ID, exec.session.ID, stepCompletedSeq, "plan.step.completed", "runtime", map[string]any{
+			"step_id": exec.plan.Steps[currentIdx].ID,
+		}),
+		e.newEvent(exec.run, exec.task.ID, exec.session.ID, stepStartedSeq, "plan.step.started", "runtime", map[string]any{
+			"step_id":    exec.currentStep.ID,
+			"step_index": nextIdx,
+			"step_total": len(exec.plan.Steps),
+		}),
+	}
+	if err := e.appendEvents(events, exec.observer); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 func (e *Executor) failOnly(exec *runExecution, err error, sequence int64) error {

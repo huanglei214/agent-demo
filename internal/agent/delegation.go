@@ -192,11 +192,11 @@ func (e *Executor) spawnChildRun(runCtx context.Context, parentTask harnessrunti
 		Status:      harnessruntime.RunPending,
 		Provider:    parentRun.Provider,
 		Model:       parentRun.Model,
-		MaxTurns:    3,
+		MaxTurns:    e.Config.Agent.MaxSubagentTurns,
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
-	childPlan, err := e.Planner.CreatePlan(context.Background(), planner.PlanInput{
+	childPlan, err := e.Planner.CreatePlan(runCtx, planner.PlanInput{
 		RunID:     childRun.ID,
 		Goal:      task.Goal,
 		Workspace: parentTask.Workspace,
@@ -255,7 +255,14 @@ func (e *Executor) spawnChildRun(runCtx context.Context, parentTask harnessrunti
 		return ExecutionResponse{}, harnessruntime.DelegationResult{}, err
 	}
 
-	response, err := e.executeRun(runCtx, childTask, session, childRun, childPlan, state, true, nil)
+	childCtx := runCtx
+	if timeout := time.Duration(e.Config.Agent.DelegationTimeoutSecs) * time.Second; timeout > 0 {
+		var cancel context.CancelFunc
+		childCtx, cancel = context.WithTimeout(runCtx, timeout)
+		defer cancel()
+	}
+
+	response, err := e.executeRun(childCtx, childTask, session, childRun, childPlan, state, true, nil)
 	if err != nil {
 		return ExecutionResponse{}, harnessruntime.DelegationResult{}, err
 	}

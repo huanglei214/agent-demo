@@ -562,3 +562,62 @@ func (s *failingFailStreamSink) Fail(err error) error {
 	}
 	return nil
 }
+
+func TestCoalescingSinkIgnoresEmptyDeltas(t *testing.T) {
+	t.Parallel()
+
+	clock := newFakeCoalescingClock(time.Unix(0, 0))
+	downstream := &captureModelStreamSink{}
+	sink := newCoalescingStreamSink(downstream, coalescingPolicyDefaults(), clock.Now)
+
+	if err := sink.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := sink.Delta(""); err != nil {
+		t.Fatalf("empty delta: %v", err)
+	}
+	if err := sink.Delta(""); err != nil {
+		t.Fatalf("second empty delta: %v", err)
+	}
+	clock.Advance(100 * time.Millisecond)
+	if err := sink.Complete(); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if len(downstream.deltas) != 0 {
+		t.Fatalf("expected no deltas for empty input, got %#v", downstream.deltas)
+	}
+}
+
+func TestCoalescingSinkFlushesOnConsecutivePunctuation(t *testing.T) {
+	t.Parallel()
+
+	clock := newFakeCoalescingClock(time.Unix(0, 0))
+	downstream := &captureModelStreamSink{}
+	sink := newCoalescingStreamSink(downstream, coalescingPolicyDefaults(), clock.Now)
+
+	if err := sink.Delta("hello"); err != nil {
+		t.Fatalf("delta: %v", err)
+	}
+	if err := sink.Delta("。"); err != nil {
+		t.Fatalf("delta: %v", err)
+	}
+	if err := sink.Delta("world"); err != nil {
+		t.Fatalf("delta: %v", err)
+	}
+	if err := sink.Delta("！"); err != nil {
+		t.Fatalf("delta: %v", err)
+	}
+	if err := sink.Complete(); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	if len(downstream.deltas) != 2 {
+		t.Fatalf("expected 2 flushes for consecutive punctuation marks, got %d: %#v", len(downstream.deltas), downstream.deltas)
+	}
+	if downstream.deltas[0] != "hello。" {
+		t.Fatalf("expected first flush 'hello。', got %q", downstream.deltas[0])
+	}
+	if downstream.deltas[1] != "world！" {
+		t.Fatalf("expected second flush 'world！', got %q", downstream.deltas[1])
+	}
+}
