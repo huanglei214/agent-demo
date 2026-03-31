@@ -906,7 +906,7 @@ func TestStartRunActivatesExplicitSkillAndNarrowsPromptTools(t *testing.T) {
 	assertEventPresent(t, events, "skill.activated")
 }
 
-func TestStartRunInjectsTodoPromptContextForTodoMode(t *testing.T) {
+func TestStartRunOmitsEmptyTodoPromptContextForTodoMode(t *testing.T) {
 	t.Setenv("HARNESS_PROVIDER", "mock")
 	workspace := t.TempDir()
 
@@ -934,13 +934,14 @@ func TestStartRunInjectsTodoPromptContextForTodoMode(t *testing.T) {
 	if response.Run.PlanMode != harnessruntime.PlanModeTodo {
 		t.Fatalf("expected todo plan mode, got %#v", response.Run)
 	}
-	for _, fragment := range []string{"Todo snapshot:", "Todo rules:", "Use the `todo` action for complex tasks when helpful."} {
-		if !strings.Contains(captured.Input, fragment) {
-			t.Fatalf("expected captured prompt input to contain %q, got:\n%s", fragment, captured.Input)
-		}
+	if strings.Contains(captured.Input, "Todo snapshot:") || strings.Contains(captured.Input, "Todo rules:") {
+		t.Fatalf("expected empty todo-mode prompt to omit todo context, got:\n%s", captured.Input)
 	}
 	if captured.Metadata["plan_mode"] != string(harnessruntime.PlanModeTodo) {
 		t.Fatalf("expected todo plan_mode metadata, got %#v", captured.Metadata)
+	}
+	if captured.Metadata["todo_count"] != 0 {
+		t.Fatalf("expected zero todo_count metadata, got %#v", captured.Metadata)
 	}
 }
 

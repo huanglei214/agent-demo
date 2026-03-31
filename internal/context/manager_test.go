@@ -64,6 +64,50 @@ func TestBuildOrdersContextSections(t *testing.T) {
 	}
 }
 
+func TestBuildOmitsWorkspaceFromPinnedContextAndRecentEvents(t *testing.T) {
+	t.Parallel()
+
+	manager := NewManager()
+	task := harnessruntime.Task{
+		ID:          "task_1",
+		Instruction: "summarize the repo",
+		Workspace:   "/workspace",
+	}
+	plan := harnessruntime.Plan{
+		ID:      "plan_1",
+		Goal:    "summarize the repo",
+		Version: 1,
+		Steps: []harnessruntime.PlanStep{{
+			ID:          "step_1",
+			Title:       "Read files",
+			Description: "Read important files",
+			Status:      harnessruntime.StepRunning,
+		}},
+	}
+
+	rendered := manager.Build(BuildInput{
+		Task:        task,
+		Plan:        plan,
+		CurrentStep: &plan.Steps[0],
+		RecentEvents: []harnessruntime.Event{
+			{Type: "tool.succeeded", Actor: "tool", Sequence: 3},
+		},
+	}).Render()
+
+	if !strings.Contains(rendered, "Pinned Context:") {
+		t.Fatalf("expected pinned context to remain, got:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "- Goal: summarize the repo") {
+		t.Fatalf("expected goal to remain pinned, got:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "- Workspace: /workspace") {
+		t.Fatalf("expected workspace to be omitted from pinned context, got:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "Recent Events:") {
+		t.Fatalf("expected recent events to be omitted from rendered model context, got:\n%s", rendered)
+	}
+}
+
 func TestShouldCompactAndCompact(t *testing.T) {
 	t.Parallel()
 

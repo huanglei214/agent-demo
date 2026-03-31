@@ -53,6 +53,47 @@ func TestBuildRunPromptIncludesFourLayers(t *testing.T) {
 	}
 }
 
+func TestBuildRunPromptDoesNotDuplicateWorkspaceOrCurrentStep(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder()
+	task := harnessruntime.Task{
+		ID:          "task_1",
+		Instruction: "summarize README",
+		Workspace:   "/workspace",
+	}
+	plan := harnessruntime.Plan{
+		ID:      "plan_1",
+		Goal:    "summarize README",
+		Version: 1,
+		Steps: []harnessruntime.PlanStep{{
+			ID:          "step_1",
+			Title:       "Read README",
+			Description: "Open README.md",
+			Status:      harnessruntime.StepRunning,
+		}},
+	}
+
+	manager := harnesscontext.NewManager()
+	modelContext := manager.Build(harnesscontext.BuildInput{
+		Task:        task,
+		Plan:        plan,
+		CurrentStep: &plan.Steps[0],
+	})
+
+	prompt := builder.BuildRunPrompt(harnessruntime.RunRoleLead, task, plan, &plan.Steps[0], modelContext, nil, nil)
+
+	if got := strings.Count(prompt.Input, "/workspace"); got != 1 {
+		t.Fatalf("expected workspace to appear once, got %d in:\n%s", got, prompt.Input)
+	}
+	if strings.Contains(prompt.Input, "Current step:") {
+		t.Fatalf("expected duplicated current-step block to be removed, got:\n%s", prompt.Input)
+	}
+	if !strings.Contains(prompt.Input, "Active Step:") {
+		t.Fatalf("expected plan context to keep active step, got:\n%s", prompt.Input)
+	}
+}
+
 func TestInjectTodoContextAddsSnapshotAndRulesForTodoMode(t *testing.T) {
 	t.Parallel()
 
