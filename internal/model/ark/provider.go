@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -185,24 +187,251 @@ func (p Provider) Generate(ctx context.Context, req internalmodel.Request) (inte
 }
 
 func (p Provider) GenerateStream(ctx context.Context, req internalmodel.Request, sink internalmodel.StreamSink) error {
-	resp, err := p.Generate(ctx, req)
+	if p.config.Ark.APIKey == "" || p.config.Ark.BaseURL == "" || p.config.Ark.ModelID == "" {
+		return &Error{
+			Kind:    ErrorKindConfig,
+			Message: "provider is not configured",
+		}
+	}
+
+	if err := p.acquireConcurrency(ctx); err != nil {
+		return err
+	}
+	defer p.releaseConcurrency()
+
+	if err := p.waitForTokenBudget(ctx, estimateRequestTokens(req)); err != nil {
+		return err
+	}
+
+	client := arkruntime.NewClientWithApiKey(
+		p.config.Ark.APIKey,
+		arkruntime.WithBaseUrl(strings.TrimRight(p.config.Ark.BaseURL, "/")),
+		arkruntime.WithHTTPClient(p.http),
+	)
+
+	stream, err := client.CreateChatCompletionStream(ctx, arksdkmodel.CreateChatCompletionRequest{
+		Model: p.config.Ark.ModelID,
+		Messages: []*arksdkmodel.ChatCompletionMessage{
+			{
+				Role:    arksdkmodel.ChatMessageRoleSystem,
+				Content: textContent(req.SystemPrompt),
+			},
+			{
+				Role:    arksdkmodel.ChatMessageRoleUser,
+				Content: textContent(req.Input),
+			},
+		},
+	})
 	if err != nil {
-		return err
+		return classifySDKError(ctx, err)
 	}
-	text, final := finalAnswerText(resp.Text)
-	if !final {
-		return &internalmodel.NonFinalStreamResponseError{Response: resp}
-	}
+	defer stream.Close()
+
 	if sink == nil {
-		return nil
+		sink = noopStreamSink{}
 	}
-	if err := sink.Start(); err != nil {
-		return err
+
+	var (
+		started       bool
+		modeKnown     bool
+		structured    bool
+		emittedAnswer string
+		fullResponse  strings.Builder
+	)
+	for {
+		chunk, recvErr := stream.Recv()
+		if recvErr != nil {
+			if errors.Is(recvErr, io.EOF) {
+				break
+			}
+			if started {
+				_ = sink.Fail(recvErr)
+			}
+			return classifySDKError(ctx, recvErr)
+		}
+		for _, choice := range chunk.Choices {
+			if choice == nil {
+				continue
+			}
+			delta := choice.Delta.Content
+			if delta == "" {
+				continue
+			}
+			fullResponse.WriteString(delta)
+			if !modeKnown {
+				trimmed := strings.TrimSpace(fullResponse.String())
+				if trimmed == "" {
+					continue
+				}
+				modeKnown = true
+				structured = strings.HasPrefix(trimmed, "{")
+				if !structured {
+					if err := sink.Start(); err != nil {
+						return err
+					}
+					started = true
+				}
+			}
+			if !structured {
+				if err := sink.Delta(delta); err != nil {
+					return err
+				}
+				continue
+			}
+
+			action, actionFound, actionComplete := extractJSONStringFieldProgress(fullResponse.String(), "action")
+			if !actionFound || !actionComplete || action != "final" {
+				continue
+			}
+			answer, answerFound, _ := extractJSONStringFieldProgress(fullResponse.String(), "answer")
+			if !answerFound {
+				continue
+			}
+			if !started {
+				if err := sink.Start(); err != nil {
+					return err
+				}
+				started = true
+			}
+			if len(answer) > len(emittedAnswer) {
+				suffix := answer[len(emittedAnswer):]
+				if suffix != "" {
+					if err := sink.Delta(suffix); err != nil {
+						return err
+					}
+				}
+				emittedAnswer = answer
+			}
+		}
 	}
-	if err := sink.Delta(text); err != nil {
-		return err
+
+	responseText := fullResponse.String()
+	if responseText == "" {
+		resp, err := p.Generate(ctx, req)
+		if err != nil {
+			return err
+		}
+		responseText = resp.Text
+	}
+
+	if !modeKnown || structured {
+		text, final := finalAnswerText(responseText)
+		if !final {
+			return &internalmodel.NonFinalStreamResponseError{Response: internalmodel.Response{Text: responseText, FinishReason: "stop"}}
+		}
+		if !started {
+			if err := sink.Start(); err != nil {
+				return err
+			}
+			started = true
+		}
+		if len(text) > len(emittedAnswer) {
+			suffix := text[len(emittedAnswer):]
+			if suffix != "" {
+				if err := sink.Delta(suffix); err != nil {
+					return err
+				}
+			}
+			emittedAnswer = text
+		}
 	}
 	return sink.Complete()
+}
+
+type noopStreamSink struct{}
+
+func (noopStreamSink) Start() error       { return nil }
+func (noopStreamSink) Delta(string) error { return nil }
+func (noopStreamSink) Complete() error    { return nil }
+func (noopStreamSink) Fail(error) error   { return nil }
+
+func extractJSONStringFieldProgress(input, field string) (value string, found bool, complete bool) {
+	key := `"` + field + `"`
+	idx := strings.Index(input, key)
+	if idx < 0 {
+		return "", false, false
+	}
+	i := idx + len(key)
+	for i < len(input) {
+		switch input[i] {
+		case ' ', '\n', '\r', '\t':
+			i++
+		default:
+			goto colon
+		}
+	}
+	return "", true, false
+
+colon:
+	if input[i] != ':' {
+		return "", true, false
+	}
+	i++
+	for i < len(input) {
+		switch input[i] {
+		case ' ', '\n', '\r', '\t':
+			i++
+		default:
+			goto value
+		}
+	}
+	return "", true, false
+
+value:
+	if i >= len(input) || input[i] != '"' {
+		return "", true, false
+	}
+	i++
+
+	var builder strings.Builder
+	for i < len(input) {
+		ch := input[i]
+		if ch == '"' {
+			return builder.String(), true, true
+		}
+		if ch != '\\' {
+			builder.WriteByte(ch)
+			i++
+			continue
+		}
+		if i+1 >= len(input) {
+			return builder.String(), true, false
+		}
+		esc := input[i+1]
+		switch esc {
+		case '"', '\\', '/':
+			builder.WriteByte(esc)
+			i += 2
+		case 'b':
+			builder.WriteByte('\b')
+			i += 2
+		case 'f':
+			builder.WriteByte('\f')
+			i += 2
+		case 'n':
+			builder.WriteByte('\n')
+			i += 2
+		case 'r':
+			builder.WriteByte('\r')
+			i += 2
+		case 't':
+			builder.WriteByte('\t')
+			i += 2
+		case 'u':
+			if i+6 > len(input) {
+				return builder.String(), true, false
+			}
+			codepoint, err := strconv.ParseUint(input[i+2:i+6], 16, 64)
+			if err != nil {
+				return builder.String(), true, false
+			}
+			builder.WriteRune(rune(codepoint))
+			i += 6
+		default:
+			return builder.String(), true, false
+		}
+	}
+	return builder.String(), true, false
 }
 
 func finalAnswerText(responseText string) (string, bool) {

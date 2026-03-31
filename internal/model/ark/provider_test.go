@@ -107,6 +107,131 @@ func TestGenerateStreamFallsBackToSingleDelta(t *testing.T) {
 	}
 }
 
+func TestGenerateStreamUsesSDKStreamingChunks(t *testing.T) {
+	t.Parallel()
+
+	provider := New(config.ModelConfig{
+		Ark: config.ArkConfig{
+			APIKey:  "test-key",
+			BaseURL: "https://ark.example.com",
+			ModelID: "ark-test",
+		},
+	})
+	provider.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path != "/chat/completions" {
+				t.Fatalf("unexpected path: %s", r.URL.Path)
+			}
+			if got := r.Header.Get("Accept"); got != "text/event-stream" {
+				t.Fatalf("expected stream accept header, got %q", got)
+			}
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read request body: %v", err)
+			}
+			if !bytes.Contains(body, []byte(`"stream":true`)) {
+				t.Fatalf("expected request body to enable streaming, got %s", body)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+					streamChunk(t, "hello", nil),
+					"",
+					streamChunk(t, " world", "stop"),
+					"",
+					"data: [DONE]",
+					"",
+				}, "\n"))),
+			}, nil
+		}),
+	}
+
+	sink := &capturingStreamSink{}
+	if err := provider.GenerateStream(context.Background(), model.Request{Input: "hello world"}, sink); err != nil {
+		t.Fatalf("generate stream: %v", err)
+	}
+	if sink.started != 1 || sink.completed != 1 || sink.failed != 0 {
+		t.Fatalf("unexpected sink lifecycle: %#v", sink)
+	}
+	if got := sink.deltas; len(got) != 2 || got[0] != "hello" || got[1] != " world" {
+		t.Fatalf("expected streamed deltas, got %#v", got)
+	}
+}
+
+func TestGenerateStreamReturnsNonFinalResponseWithoutStreamingStructuredAction(t *testing.T) {
+	t.Parallel()
+
+	actionText := `{"action":"tool","calls":[{"tool":"fs.read_file","input":{"path":"README.md"}}]}`
+	splitAt := strings.Index(actionText, `,"calls"`)
+	if splitAt <= 0 {
+		t.Fatalf("expected split point in %q", actionText)
+	}
+
+	provider := New(config.ModelConfig{
+		Ark: config.ArkConfig{
+			APIKey:  "test-key",
+			BaseURL: "https://ark.example.com",
+			ModelID: "ark-test",
+		},
+	})
+	provider.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+					streamChunk(t, actionText[:splitAt], nil),
+					"",
+					streamChunk(t, actionText[splitAt:], "stop"),
+					"",
+					"data: [DONE]",
+					"",
+				}, "\n"))),
+			}, nil
+		}),
+	}
+
+	sink := &capturingStreamSink{}
+	err := provider.GenerateStream(context.Background(), model.Request{Input: "readme"}, sink)
+	if err == nil {
+		t.Fatal("expected non-final stream response error")
+	}
+	var nonFinal *model.NonFinalStreamResponseError
+	if !errors.As(err, &nonFinal) {
+		t.Fatalf("expected NonFinalStreamResponseError, got %T", err)
+	}
+	var action model.Action
+	if err := json.Unmarshal([]byte(nonFinal.Response.Text), &action); err != nil {
+		t.Fatalf("unmarshal streamed action: %v", err)
+	}
+	if action.Action != "tool" {
+		t.Fatalf("expected tool action, got %#v", action)
+	}
+	if sink.started != 0 || sink.completed != 0 || sink.failed != 0 || len(sink.deltas) != 0 {
+		t.Fatalf("expected no sink events for non-final stream, got %#v", sink)
+	}
+}
+
+func streamChunk(t *testing.T, content string, finishReason any) string {
+	t.Helper()
+	payload := map[string]any{
+		"id":      "resp_1",
+		"model":   "ark-test",
+		"created": 123,
+		"choices": []map[string]any{{
+			"index":         0,
+			"delta":         map[string]any{"content": content},
+			"finish_reason": finishReason,
+		}},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal stream chunk: %v", err)
+	}
+	return "data: " + string(data)
+}
+
 type capturingStreamSink struct {
 	started   int
 	completed int
