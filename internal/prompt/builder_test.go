@@ -199,7 +199,7 @@ func TestNewBuilderLoadsExternalizedTemplates(t *testing.T) {
 	}
 }
 
-func TestBuildFollowUpPromptIncludesWorkingEvidence(t *testing.T) {
+func TestBuildFollowUpPromptIncludesHistoricalWorkingEvidence(t *testing.T) {
 	t.Parallel()
 
 	builder := NewBuilder()
@@ -215,12 +215,24 @@ func TestBuildFollowUpPromptIncludesWorkingEvidence(t *testing.T) {
 		Result:     map[string]any{"path": "README.md"},
 	}}, map[string]any{
 		"fs.read_file": []map[string]any{{"tool_call_id": "toolcall_1", "result": map[string]any{"path": "README.md"}}},
+		"bash.exec":    []map[string]any{{"tool_call_id": "toolcall_0", "result": map[string]any{"command": "ls", "exit_code": 0}}},
 	}, []map[string]string{
 		{"name": "fs.read_file", "description": "Read a file"},
 	}, nil)
 
 	if !strings.Contains(prompt.Input, "Working evidence:") {
 		t.Fatalf("expected follow-up prompt to include working evidence, got:\n%s", prompt.Input)
+	}
+	parts := strings.SplitN(prompt.Input, "Working evidence:\n", 2)
+	if len(parts) != 2 {
+		t.Fatalf("expected working evidence section, got:\n%s", prompt.Input)
+	}
+	workingSection := parts[1]
+	if strings.Contains(workingSection, "toolcall_1") {
+		t.Fatalf("expected current batch evidence to be omitted from working evidence, got:\n%s", workingSection)
+	}
+	if !strings.Contains(workingSection, "toolcall_0") {
+		t.Fatalf("expected historical working evidence to remain, got:\n%s", workingSection)
 	}
 	if prompt.Metadata["new_tool_count"] != 1 {
 		t.Fatalf("unexpected metadata: %#v", prompt.Metadata)

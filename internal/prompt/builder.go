@@ -73,8 +73,9 @@ func (b Builder) BuildFollowUpPrompt(role harnessruntime.RunRole, task harnessru
 		inputParts = append(inputParts, "Original instruction:\n"+task.Instruction)
 	}
 	inputParts = append(inputParts, "New tool results:\n"+harnessruntime.MustJSON(summarizeToolResultsForPrompt(toolResults)))
-	if len(workingEvidence) > 0 {
-		inputParts = append(inputParts, "Working evidence:\n"+harnessruntime.MustJSON(workingEvidence))
+	historicalEvidence := historicalWorkingEvidenceForFollowUp(toolResults, workingEvidence)
+	if len(historicalEvidence) > 0 {
+		inputParts = append(inputParts, "Working evidence:\n"+harnessruntime.MustJSON(historicalEvidence))
 	}
 
 	return Prompt{
@@ -126,6 +127,71 @@ func (b Builder) BuildForcedFinalPrompt(role harnessruntime.RunRole, task harnes
 			"tool_count":   len(tools),
 			"forced_final": true,
 		},
+	}
+}
+
+func historicalWorkingEvidenceForFollowUp(toolResults []harnessruntime.ToolCallResult, workingEvidence map[string]any) map[string]any {
+	if len(workingEvidence) == 0 || len(toolResults) == 0 {
+		return workingEvidence
+	}
+
+	currentIDs := map[string]struct{}{}
+	for _, toolResult := range toolResults {
+		if id := strings.TrimSpace(toolResult.ToolCallID); id != "" {
+			currentIDs[id] = struct{}{}
+		}
+	}
+	if len(currentIDs) == 0 {
+		return workingEvidence
+	}
+
+	filtered := map[string]any{}
+	changed := false
+	for toolName, rawEntries := range workingEvidence {
+		entries, ok := normalizeWorkingEvidenceEntries(rawEntries)
+		if !ok {
+			return workingEvidence
+		}
+
+		kept := make([]map[string]any, 0, len(entries))
+		for _, entry := range entries {
+			toolCallID, _ := entry["tool_call_id"].(string)
+			if _, duplicated := currentIDs[strings.TrimSpace(toolCallID)]; duplicated {
+				changed = true
+				continue
+			}
+			kept = append(kept, entry)
+		}
+		if len(kept) > 0 {
+			filtered[toolName] = kept
+		}
+	}
+
+	if !changed {
+		return workingEvidence
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
+}
+
+func normalizeWorkingEvidenceEntries(raw any) ([]map[string]any, bool) {
+	switch entries := raw.(type) {
+	case []map[string]any:
+		return entries, true
+	case []any:
+		normalized := make([]map[string]any, 0, len(entries))
+		for _, entry := range entries {
+			item, ok := entry.(map[string]any)
+			if !ok {
+				return nil, false
+			}
+			normalized = append(normalized, item)
+		}
+		return normalized, true
+	default:
+		return nil, false
 	}
 }
 
