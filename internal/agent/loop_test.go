@@ -104,22 +104,16 @@ func TestExecuteRunStreamedFinalAnswerPersistsOnlyFinalAssistantMessage(t *testi
 	if got := countEventTypeLoop(observer.runtimeEvents, "assistant.message"); got != 1 {
 		t.Fatalf("expected exactly one assistant.message event, got %d in %#v", got, eventTypesLoop(observer.runtimeEvents))
 	}
-	if got := len(observer.answerStreamEvents); got != 5 {
-		t.Fatalf("expected start, 3 deltas, and completed answer stream events, got %#v", observer.answerStreamEvents)
+	if got := len(observer.answerStreamEvents); got != 3 {
+		t.Fatalf("expected start, coalesced delta, and completed answer stream events, got %#v", observer.answerStreamEvents)
 	}
 	if observer.answerStreamEvents[0].Type != AnswerStreamEventStart {
 		t.Fatalf("expected first stream event to be start, got %#v", observer.answerStreamEvents)
 	}
-	if observer.answerStreamEvents[1].Type != AnswerStreamEventDelta || observer.answerStreamEvents[1].Delta != "mock response: Hello" {
-		t.Fatalf("expected first delta event to match first chunk, got %#v", observer.answerStreamEvents)
+	if observer.answerStreamEvents[1].Type != AnswerStreamEventDelta || observer.answerStreamEvents[1].Delta != "mock response: Hello, world" {
+		t.Fatalf("expected coalesced delta event to match concatenated text, got %#v", observer.answerStreamEvents)
 	}
-	if observer.answerStreamEvents[2].Type != AnswerStreamEventDelta || observer.answerStreamEvents[2].Delta != ", " {
-		t.Fatalf("expected second delta event to match second chunk, got %#v", observer.answerStreamEvents)
-	}
-	if observer.answerStreamEvents[3].Type != AnswerStreamEventDelta || observer.answerStreamEvents[3].Delta != "world" {
-		t.Fatalf("expected third delta event to match third chunk, got %#v", observer.answerStreamEvents)
-	}
-	if observer.answerStreamEvents[4].Type != AnswerStreamEventCompleted {
+	if observer.answerStreamEvents[2].Type != AnswerStreamEventCompleted {
 		t.Fatalf("expected final stream event to be completed, got %#v", observer.answerStreamEvents)
 	}
 
@@ -219,13 +213,13 @@ func TestExecuteRunStreamFailureEmitsFailedAnswerStreamEvent(t *testing.T) {
 	_ = response
 
 	if got := len(observer.answerStreamEvents); got != 3 {
-		t.Fatalf("expected start, delta, and failed answer stream events, got %#v", observer.answerStreamEvents)
+		t.Fatalf("expected start, coalesced delta, and failed answer stream events, got %#v", observer.answerStreamEvents)
 	}
 	if observer.answerStreamEvents[0].Type != AnswerStreamEventStart {
 		t.Fatalf("expected first stream event to be start, got %#v", observer.answerStreamEvents)
 	}
 	if observer.answerStreamEvents[1].Type != AnswerStreamEventDelta || observer.answerStreamEvents[1].Delta != "partial answer" {
-		t.Fatalf("expected second stream event to be delta, got %#v", observer.answerStreamEvents)
+		t.Fatalf("expected second stream event to be coalesced delta, got %#v", observer.answerStreamEvents)
 	}
 	if observer.answerStreamEvents[2].Type != AnswerStreamEventFailed {
 		t.Fatalf("expected final stream event to be failed, got %#v", observer.answerStreamEvents)

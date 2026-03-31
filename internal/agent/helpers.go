@@ -260,13 +260,16 @@ func (e *Executor) generateModelResponse(runCtx context.Context, exec *runExecut
 			sessionID: exec.session.ID,
 			messageID: messageID,
 		}
-		err := e.generateStreamWithModelTimeout(runCtx, streamingProvider, req, accumulator)
+		sink := newCoalescingStreamSink(accumulator, coalescingPolicyDefaults(), time.Now)
+		err := e.generateStreamWithModelTimeout(runCtx, streamingProvider, req, sink)
 		if err != nil {
 			var nonFinal *model.NonFinalStreamResponseError
 			if errors.As(err, &nonFinal) {
 				return nonFinal.Response, nil
 			}
-			_ = accumulator.Fail(err)
+			if failErr := sink.Fail(err); failErr != nil {
+				return model.Response{}, failErr
+			}
 			return model.Response{}, err
 		}
 		return model.Response{Text: accumulator.text(), FinishReason: "stop"}, nil

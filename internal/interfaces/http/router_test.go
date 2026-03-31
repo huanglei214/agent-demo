@@ -303,8 +303,11 @@ func TestAGUIChatEndpoint(t *testing.T) {
 			t.Fatalf("expected stream body to contain %s, got %s", needle, bodyText)
 		}
 	}
-	if got := strings.Count(bodyText, `"type":"TEXT_MESSAGE_CONTENT"`); got < 2 {
-		t.Fatalf("expected multiple streamed TEXT_MESSAGE_CONTENT chunks, got %d body=%s", got, bodyText)
+	if !strings.Contains(bodyText, `"type":"TEXT_MESSAGE_CONTENT"`) {
+		t.Fatalf("expected streamed text content, got %s", bodyText)
+	}
+	if strings.Contains(bodyText, `"delta":"m"`) {
+		t.Fatalf("expected coalesced chunks rather than single-character deltas, got %s", bodyText)
 	}
 	if got := strings.Count(bodyText, `"type":"TEXT_MESSAGE_START"`); got != 1 {
 		t.Fatalf("expected exactly one TEXT_MESSAGE_START, got %d body=%s", got, bodyText)

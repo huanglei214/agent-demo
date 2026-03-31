@@ -694,7 +694,7 @@ func TestStartRunStreamReceivesStreamingAnswerEvents(t *testing.T) {
 	services.Runner = nil
 	services = newTestServices(t, cfg, func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
 		modelServices.ModelFactory = func() (model.Model, error) {
-			return &streamingRunModel{chunks: []string{"mock response: Hello", ", ", "world"}}, nil
+			return &streamingRunModel{chunks: []string{"mock response.", " Hello", ", world."}}, nil
 		}
 	})
 
@@ -708,14 +708,57 @@ func TestStartRunStreamReceivesStreamingAnswerEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected run to succeed, got %v", err)
 	}
-	if response.Result == nil || response.Result.Output != "mock response: Hello, world" {
+	if response.Result == nil || response.Result.Output != "mock response. Hello, world." {
 		t.Fatalf("expected streamed final answer to be persisted, got %#v", response.Result)
 	}
 	if !observer.hasAnswerEvent(agent.AnswerStreamEventStart) {
 		t.Fatalf("expected answer stream start event, got %#v", observer.answerEvents)
 	}
-	if got := observer.answerText(); got != "mock response: Hello, world" {
+	if got := observer.answerText(); got != "mock response. Hello, world." {
 		t.Fatalf("expected concatenated answer stream text, got %q", got)
+	}
+}
+
+func TestStartRunStreamCoalescesStreamingAnswerEvents(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	cfg := config.Load(workspace)
+	cfg.Workspace = workspace
+	cfg.Runtime.Root = filepath.Join(workspace, ".runtime")
+	cfg.Model.Provider = "mock"
+	cfg.Model.Model = "mock-model"
+
+	observer := &captureStreamingRunObserver{}
+	services := newTestServices(t, cfg, func(_ *agent.RuntimeServices, modelServices *agent.ModelServices, _ *agent.AgentServices, _ *agent.ToolServices, _ *agent.DelegationServices) {
+		modelServices.ModelFactory = func() (model.Model, error) {
+			return &streamingRunModel{chunks: []string{"mock response.", " Hello", ", world."}}, nil
+		}
+	})
+
+	response, err := services.StartRunStream(context.Background(), RunRequest{
+		Instruction: "Summarize the repository in one short paragraph",
+		Workspace:   workspace,
+		Provider:    "mock",
+		Model:       "mock-model",
+		MaxTurns:    4,
+	}, observer)
+	if err != nil {
+		t.Fatalf("expected run to succeed, got %v", err)
+	}
+	if response.Result == nil || response.Result.Output != "mock response. Hello, world." {
+		t.Fatalf("expected final answer to remain intact, got %#v", response.Result)
+	}
+
+	got := observer.answerDeltaTexts()
+	want := []string{"mock response.", " Hello, world."}
+	if len(got) != len(want) {
+		t.Fatalf("expected coalesced answer deltas %#v, got %#v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("expected delta %d to be %q, got %#v", i, want[i], got)
+		}
 	}
 }
 
@@ -1684,7 +1727,7 @@ type streamingRunModel struct {
 func (m *streamingRunModel) Generate(ctx context.Context, req model.Request) (model.Response, error) {
 	_ = ctx
 	_ = req
-	return model.Response{Text: `{"action":"final","answer":"mock response: Hello, world"}`, FinishReason: "stop"}, nil
+	return model.Response{Text: `{"action":"final","answer":"mock response. Hello, world."}`, FinishReason: "stop"}, nil
 }
 
 func (m *streamingRunModel) GenerateStream(ctx context.Context, req model.Request, sink model.StreamSink) error {
@@ -1734,6 +1777,16 @@ func (o *captureStreamingRunObserver) answerText() string {
 		}
 	}
 	return builder.String()
+}
+
+func (o *captureStreamingRunObserver) answerDeltaTexts() []string {
+	var deltas []string
+	for _, event := range o.answerEvents {
+		if event.Type == agent.AnswerStreamEventDelta {
+			deltas = append(deltas, event.Delta)
+		}
+	}
+	return deltas
 }
 
 type failingModel struct {
