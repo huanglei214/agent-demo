@@ -66,31 +66,33 @@ func TestBuildRunPromptDoesNotDuplicateWorkspaceOrCurrentStep(t *testing.T) {
 		ID:      "plan_1",
 		Goal:    "summarize README",
 		Version: 1,
-		Steps: []harnessruntime.PlanStep{{
-			ID:          "step_1",
-			Title:       "Read README",
-			Description: "Open README.md",
-			Status:      harnessruntime.StepRunning,
-		}},
+	}
+	step := harnessruntime.PlanStep{
+		ID:          "step_1",
+		Title:       "Read README",
+		Description: "Open README.md",
+		Status:      harnessruntime.StepRunning,
+	}
+	modelContext := harnesscontext.ModelContext{
+		Pinned: []harnesscontext.Item{
+			{Title: "Goal", Content: "summarize README"},
+		},
+		Plan: []harnesscontext.Item{
+			{Title: "Plan", Content: "plan_id=plan_1 version=1 goal=summarize README"},
+			{Title: "Active Step", Content: "step_id=step_1 title=Read README status=running description=Open README.md"},
+		},
 	}
 
-	manager := harnesscontext.NewManager()
-	modelContext := manager.Build(harnesscontext.BuildInput{
-		Task:        task,
-		Plan:        plan,
-		CurrentStep: &plan.Steps[0],
-	})
+	prompt := builder.BuildRunPrompt(harnessruntime.RunRoleLead, task, plan, &step, modelContext, nil, nil)
 
-	prompt := builder.BuildRunPrompt(harnessruntime.RunRoleLead, task, plan, &plan.Steps[0], modelContext, nil, nil)
-
-	if got := strings.Count(prompt.Input, "/workspace"); got != 1 {
-		t.Fatalf("expected workspace to appear once, got %d in:\n%s", got, prompt.Input)
-	}
 	if strings.Contains(prompt.Input, "Current step:") {
 		t.Fatalf("expected duplicated current-step block to be removed, got:\n%s", prompt.Input)
 	}
 	if !strings.Contains(prompt.Input, "Active Step:") {
 		t.Fatalf("expected plan context to keep active step, got:\n%s", prompt.Input)
+	}
+	if !strings.Contains(prompt.Input, "Workspace:\n/workspace") {
+		t.Fatalf("expected top-level workspace block to remain, got:\n%s", prompt.Input)
 	}
 }
 
@@ -122,6 +124,29 @@ func TestInjectTodoContextAddsSnapshotAndRulesForTodoMode(t *testing.T) {
 	}
 	if prompt.Metadata["todo_count"] != 2 {
 		t.Fatalf("expected todo_count metadata, got %#v", prompt.Metadata)
+	}
+}
+
+func TestInjectTodoContextOmitsSnapshotAndRulesForEmptyTodoMode(t *testing.T) {
+	t.Parallel()
+
+	base := Prompt{
+		System: "system",
+		Input:  "User instruction:\nsummarize README",
+		Metadata: map[string]any{
+			"task_id": "task_1",
+		},
+	}
+	prompt := InjectTodoContext(base, harnessruntime.Run{PlanMode: harnessruntime.PlanModeTodo}, harnessruntime.RunState{Todos: nil})
+
+	if strings.Contains(prompt.Input, "Todo snapshot:") || strings.Contains(prompt.Input, "Todo rules:") {
+		t.Fatalf("expected empty todo-mode prompt to omit todo context, got:\n%s", prompt.Input)
+	}
+	if prompt.Metadata["plan_mode"] != string(harnessruntime.PlanModeTodo) {
+		t.Fatalf("expected todo plan_mode metadata, got %#v", prompt.Metadata)
+	}
+	if prompt.Metadata["todo_count"] != 0 {
+		t.Fatalf("expected zero todo_count metadata, got %#v", prompt.Metadata)
 	}
 }
 
