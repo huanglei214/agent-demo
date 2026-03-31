@@ -559,7 +559,7 @@ func (e *Executor) resolveInitialAction(runCtx context.Context, exec *runExecuti
 		Input:        runPrompt.Input,
 		Metadata:     runPrompt.Metadata,
 	}
-	modelResponse, err := e.generateWithModelTimeout(runCtx, exec.provider, modelRequest)
+	modelResponse, err := e.generateModelResponse(runCtx, exec, modelRequest)
 	if appendErr := e.appendModelCall(exec.run, modelSequence, "", "", modelRequest, responsePtr(modelResponse, err), err); appendErr != nil {
 		return model.Action{}, appendErr
 	}

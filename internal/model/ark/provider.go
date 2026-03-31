@@ -2,6 +2,7 @@ package ark
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -181,6 +182,38 @@ func (p Provider) Generate(ctx context.Context, req internalmodel.Request) (inte
 			"usage":   usageMetadata(resp.Usage),
 		},
 	}, nil
+}
+
+func (p Provider) GenerateStream(ctx context.Context, req internalmodel.Request, sink internalmodel.StreamSink) error {
+	resp, err := p.Generate(ctx, req)
+	if err != nil {
+		return err
+	}
+	text, final := finalAnswerText(resp.Text)
+	if !final {
+		return &internalmodel.NonFinalStreamResponseError{Response: resp}
+	}
+	if sink == nil {
+		return nil
+	}
+	if err := sink.Start(); err != nil {
+		return err
+	}
+	if err := sink.Delta(text); err != nil {
+		return err
+	}
+	return sink.Complete()
+}
+
+func finalAnswerText(responseText string) (string, bool) {
+	var action internalmodel.Action
+	if err := json.Unmarshal([]byte(responseText), &action); err != nil {
+		return responseText, true
+	}
+	if action.Action != "final" || strings.TrimSpace(action.Answer) == "" {
+		return responseText, false
+	}
+	return action.Answer, true
 }
 
 func (p Provider) acquireConcurrency(ctx context.Context) error {

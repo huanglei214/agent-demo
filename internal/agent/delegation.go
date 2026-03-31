@@ -134,7 +134,7 @@ func (e *Executor) handleDelegationAction(runCtx context.Context, exec *runExecu
 		Input:        followUpPrompt.Input,
 		Metadata:     followUpPrompt.Metadata,
 	}
-	followUpResponse, err := e.generateWithModelTimeout(runCtx, exec.provider, followUpRequest)
+	followUpResponse, err := e.generateModelResponse(runCtx, exec, followUpRequest)
 	if appendErr := e.appendModelCall(exec.run, modelSequence, "post_delegation", "subagent", followUpRequest, responsePtr(followUpResponse, err), err); appendErr != nil {
 		return model.Action{}, appendErr
 	}

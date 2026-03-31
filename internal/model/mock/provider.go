@@ -67,6 +67,73 @@ func (p Provider) Generate(ctx context.Context, req model.Request) (model.Respon
 	}
 }
 
+func (p Provider) GenerateStream(ctx context.Context, req model.Request, sink model.StreamSink) error {
+	resp, err := p.Generate(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	text, final := finalAnswerText(resp.Text)
+	if !final {
+		return &model.NonFinalStreamResponseError{Response: resp}
+	}
+	if sink == nil {
+		return nil
+	}
+	if err := sink.Start(); err != nil {
+		return err
+	}
+
+	for _, chunk := range splitStreamChunks(text) {
+		if err := sink.Delta(chunk); err != nil {
+			return err
+		}
+	}
+	if err := sink.Complete(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func finalAnswerText(responseText string) (string, bool) {
+	var action model.Action
+	if err := json.Unmarshal([]byte(responseText), &action); err != nil {
+		return responseText, true
+	}
+	if action.Action != "final" || strings.TrimSpace(action.Answer) == "" {
+		return responseText, false
+	}
+	return action.Answer, true
+}
+
+func splitStreamChunks(text string) []string {
+	if text == "" {
+		return nil
+	}
+	if strings.Contains(text, ", ") {
+		parts := strings.SplitN(text, ", ", 2)
+		if len(parts) == 2 {
+			return []string{parts[0], ", ", parts[1]}
+		}
+	}
+	if strings.Contains(text, " ") {
+		parts := strings.Split(text, " ")
+		chunks := make([]string, 0, len(parts))
+		for i, part := range parts {
+			if i > 0 {
+				chunks = append(chunks, " ")
+			}
+			if part != "" {
+				chunks = append(chunks, part)
+			}
+		}
+		if len(chunks) > 0 {
+			return chunks
+		}
+	}
+	return []string{text}
+}
+
 func encodeAction(action model.Action) model.Response {
 	data, _ := json.Marshal(action)
 	return model.Response{

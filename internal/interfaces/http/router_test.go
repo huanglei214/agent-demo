@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -302,6 +303,21 @@ func TestAGUIChatEndpoint(t *testing.T) {
 			t.Fatalf("expected stream body to contain %s, got %s", needle, bodyText)
 		}
 	}
+	if got := strings.Count(bodyText, `"type":"TEXT_MESSAGE_CONTENT"`); got < 2 {
+		t.Fatalf("expected multiple streamed TEXT_MESSAGE_CONTENT chunks, got %d body=%s", got, bodyText)
+	}
+	if got := strings.Count(bodyText, `"type":"TEXT_MESSAGE_START"`); got != 1 {
+		t.Fatalf("expected exactly one TEXT_MESSAGE_START, got %d body=%s", got, bodyText)
+	}
+	if got := strings.Count(bodyText, `"type":"TEXT_MESSAGE_END"`); got != 1 {
+		t.Fatalf("expected exactly one TEXT_MESSAGE_END, got %d body=%s", got, bodyText)
+	}
+	if strings.Index(bodyText, `"type":"TEXT_MESSAGE_START"`) > strings.Index(bodyText, `"type":"TEXT_MESSAGE_END"`) {
+		t.Fatalf("expected TEXT_MESSAGE_START before TEXT_MESSAGE_END, got %s", bodyText)
+	}
+	if strings.Index(bodyText, `"type":"TEXT_MESSAGE_END"`) > strings.Index(bodyText, `"type":"RUN_FINISHED"`) {
+		t.Fatalf("expected TEXT_MESSAGE_END before RUN_FINISHED, got %s", bodyText)
+	}
 	if strings.Index(bodyText, `"type":"RUN_STARTED"`) > strings.Index(bodyText, `"type":"RUN_FINISHED"`) {
 		t.Fatalf("expected RUN_STARTED before RUN_FINISHED, got %s", bodyText)
 	}
@@ -352,6 +368,52 @@ func TestAGUIChatEndpointPassesPlanModeThroughToRun(t *testing.T) {
 		if !strings.Contains(bodyText, needle) {
 			t.Fatalf("expected stream body to contain %s, got %s", needle, bodyText)
 		}
+	}
+}
+
+func TestAGUIChatDisconnectDoesNotFailRun(t *testing.T) {
+	t.Parallel()
+
+	handler, services := newTestHandler(t)
+	if err := os.WriteFile(filepath.Join(services.Config.Workspace, "README.md"), []byte("# test\n"), 0o644); err != nil {
+		t.Fatalf("seed README: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agui/chat", bytes.NewBufferString(`{
+		"messages": [{"id":"msg_user_1","role":"user","content":"Summarize this repository"}],
+		"state": {"workspace":"`+services.Config.Workspace+`","provider":"mock","model":"mock-model","maxTurns":4}
+	}`))
+	writer := &failingStreamWriter{failAfter: 9}
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(writer, req)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not exit after stream write failure")
+	}
+	if !writer.failed {
+		t.Fatalf("expected stream writer to fail, got writes=%d err=%v", writer.writes, writer.lastErr)
+	}
+	if writer.lastErr == nil {
+		t.Fatal("expected failing stream writer to capture a concrete error")
+	}
+
+	bodyText := writer.body.String()
+	if !strings.Contains(bodyText, `"type":"RUN_STARTED"`) {
+		t.Fatalf("expected stream to start before failure, got %s", bodyText)
+	}
+	if strings.Contains(bodyText, `"type":"RUN_ERROR"`) {
+		t.Fatalf("expected no fallback RUN_ERROR for unwritable stream, got %s", bodyText)
+	}
+
+	runID := waitForAGUIRun(t, services)
+	inspection := waitForRunTerminalState(t, services, runID)
+	if inspection.Run.Status != harnessruntime.RunCompleted {
+		t.Fatalf("expected unwritable AG-UI stream to complete run, got %#v", inspection.Run)
 	}
 }
 
@@ -450,6 +512,73 @@ func seedPendingRun(t *testing.T, services service.Services) string {
 	}
 	return run.ID
 }
+
+func waitForAGUIRun(t *testing.T, services service.Services) string {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		runs, err := services.ListRuns(1)
+		if err != nil {
+			t.Fatalf("list runs: %v", err)
+		}
+		if len(runs) > 0 {
+			return runs[0].ID
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("expected at least one run")
+	return ""
+}
+
+func waitForRunTerminalState(t *testing.T, services service.Services, runID string) service.InspectResponse {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		inspection, err := services.InspectRun(runID)
+		if err != nil {
+			t.Fatalf("inspect run: %v", err)
+		}
+		switch inspection.Run.Status {
+		case harnessruntime.RunCompleted, harnessruntime.RunFailed, harnessruntime.RunCancelled:
+			return inspection
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("run %s did not reach a terminal state", runID)
+	return service.InspectResponse{}
+}
+
+type failingStreamWriter struct {
+	header    http.Header
+	body      bytes.Buffer
+	writes    int
+	failAfter int
+	failed    bool
+	lastErr   error
+}
+
+func (w *failingStreamWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+
+func (w *failingStreamWriter) WriteHeader(statusCode int) {}
+
+func (w *failingStreamWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.failAfter > 0 && w.writes > w.failAfter {
+		w.failed = true
+		w.lastErr = errors.New("stream closed")
+		return 0, w.lastErr
+	}
+	return w.body.Write(p)
+}
+
+func (w *failingStreamWriter) Flush() {}
 
 func doJSONRequest(t *testing.T, handler http.Handler, method, path string, body any) (int, map[string]any) {
 	t.Helper()

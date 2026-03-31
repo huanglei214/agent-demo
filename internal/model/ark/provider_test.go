@@ -67,6 +67,74 @@ func TestGenerateSuccess(t *testing.T) {
 	}
 }
 
+func TestGenerateStreamFallsBackToSingleDelta(t *testing.T) {
+	t.Parallel()
+
+	provider := New(config.ModelConfig{
+		Ark: config.ArkConfig{
+			APIKey:  "test-key",
+			BaseURL: "https://ark.example.com",
+			ModelID: "ark-test",
+		},
+	})
+	provider.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return jsonResponse(http.StatusOK, map[string]any{
+				"id":      "resp_1",
+				"model":   "ark-test",
+				"created": 123,
+				"choices": []map[string]any{{
+					"finish_reason": "stop",
+					"index":         0,
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": `{"action":"final","answer":"hello"}`,
+					},
+				}},
+			})
+		}),
+	}
+
+	sink := &capturingStreamSink{}
+	if err := provider.GenerateStream(context.Background(), model.Request{Input: "hello"}, sink); err != nil {
+		t.Fatalf("generate stream: %v", err)
+	}
+	if sink.started != 1 || sink.completed != 1 || sink.failed != 0 {
+		t.Fatalf("unexpected sink lifecycle: %#v", sink)
+	}
+	if got := sink.deltas; len(got) != 1 || got[0] != "hello" {
+		t.Fatalf("expected single fallback delta with final text, got %#v", got)
+	}
+}
+
+type capturingStreamSink struct {
+	started   int
+	completed int
+	failed    int
+	deltas    []string
+}
+
+func (s *capturingStreamSink) Start() error {
+	s.started++
+	return nil
+}
+
+func (s *capturingStreamSink) Delta(text string) error {
+	s.deltas = append(s.deltas, text)
+	return nil
+}
+
+func (s *capturingStreamSink) Complete() error {
+	s.completed++
+	return nil
+}
+
+func (s *capturingStreamSink) Fail(err error) error {
+	_ = err
+	s.failed++
+	return nil
+}
+
 func TestGenerateReturnsErrorOnBadStatus(t *testing.T) {
 	t.Parallel()
 

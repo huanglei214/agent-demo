@@ -241,7 +241,7 @@ export function ChatPage({
     };
 
     try {
-      await streamAGUIChat(body, {
+      const streamResult = await streamAGUIChat(body, {
         onEvent: (item) => {
           setActivity((current) => [...current, item]);
 
@@ -295,7 +295,15 @@ export function ChatPage({
         },
       });
 
-      setStreamState((current) => (current === "failed" ? current : "finished"));
+      setStreamState((current) => {
+        if (current === "failed") {
+          return current;
+        }
+        if (streamResult.interrupted) {
+          return "finished";
+        }
+        return streamResult.completed ? "finished" : current;
+      });
       await refreshSidebarSessions();
     } catch (err) {
       console.error("AG-UI chat request failed", {

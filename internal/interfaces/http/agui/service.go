@@ -7,9 +7,12 @@ import (
 	"log"
 	"strings"
 
+	"github.com/huanglei214/agent-demo/internal/agent"
 	harnessruntime "github.com/huanglei214/agent-demo/internal/runtime"
 	"github.com/huanglei214/agent-demo/internal/service"
 )
+
+var ErrStreamUnwritable = errors.New("agui stream unwritable")
 
 type Service struct {
 	services service.Services
@@ -19,7 +22,7 @@ func NewService(services service.Services) Service {
 	return Service{services: services}
 }
 
-func (s Service) StreamChat(ctx context.Context, req ChatRequest, writer *SSEWriter) error {
+func (s Service) StreamChat(_ context.Context, req ChatRequest, writer *SSEWriter) (err error) {
 	message, err := lastUserMessage(req.Messages)
 	if err != nil {
 		return err
@@ -52,8 +55,15 @@ func (s Service) StreamChat(ctx context.Context, req ChatRequest, writer *SSEWri
 
 	observer := newChannelObserver()
 	outcomeCh := make(chan runOutcome, 1)
+	runCtx := context.Background()
+	deferOnExit := true
+	defer func() {
+		if deferOnExit {
+			go drainRunCompletion(observer.events, observer.answerStream, outcomeCh)
+		}
+	}()
 	go func() {
-		response, err := s.services.StartRunStream(ctx, service.RunRequest{
+		response, err := s.services.StartRunStream(runCtx, service.RunRequest{
 			Instruction: message.Content,
 			Workspace:   workspace,
 			Provider:    provider,
@@ -65,17 +75,23 @@ func (s Service) StreamChat(ctx context.Context, req ChatRequest, writer *SSEWri
 		outcomeCh <- runOutcome{response: response, err: err}
 		close(outcomeCh)
 		close(observer.events)
+		close(observer.answerStream)
 	}()
 
 	var (
-		sawTerminal    bool
-		snapshotSent   bool
-		streamThreadID = threadID
-		streamRunID    string
-		finalOutcome   *runOutcome
+		sawTerminal              bool
+		snapshotSent             bool
+		streamingMessageID       string
+		answerStreamStarted      bool
+		answerStreamEnded        bool
+		suppressAssistantMessage bool
+		pendingTerminalEvents    []Event
+		streamThreadID           = threadID
+		streamRunID              string
+		finalOutcome             *runOutcome
 	)
 
-	for observer.events != nil || outcomeCh != nil {
+	for observer.events != nil || observer.answerStream != nil || outcomeCh != nil {
 		select {
 		case event, ok := <-observer.events:
 			if !ok {
@@ -90,8 +106,16 @@ func (s Service) StreamChat(ctx context.Context, req ChatRequest, writer *SSEWri
 			}
 
 			mapped := MapRuntimeEvent(event)
+			if shouldSuppressAssistantMessage(event, suppressAssistantMessage) {
+				suppressAssistantMessage = false
+				mapped = nil
+			}
+			if shouldDeferTerminalEvent(event, answerStreamStarted, answerStreamEnded) {
+				pendingTerminalEvents = append([]Event(nil), mapped...)
+				mapped = nil
+			}
 			for _, item := range mapped {
-				if err := writer.Write(item); err != nil {
+				if err = writeStreamEvent(writer, item); err != nil {
 					return err
 				}
 			}
@@ -101,7 +125,7 @@ func (s Service) StreamChat(ctx context.Context, req ChatRequest, writer *SSEWri
 					return err
 				}
 				for _, item := range snapshots {
-					if err := writer.Write(item); err != nil {
+					if err = writeStreamEvent(writer, item); err != nil {
 						return err
 					}
 				}
@@ -118,6 +142,60 @@ func (s Service) StreamChat(ctx context.Context, req ChatRequest, writer *SSEWri
 			if event.Type == "run.completed" || event.Type == "run.failed" {
 				sawTerminal = true
 			}
+		case streamEvent, ok := <-observer.answerStream:
+			if !ok {
+				observer.answerStream = nil
+				continue
+			}
+			if streamThreadID == "" {
+				streamThreadID = streamEvent.SessionID
+			}
+			if streamRunID == "" {
+				streamRunID = streamEvent.RunID
+			}
+			switch streamEvent.Type {
+			case agent.AnswerStreamEventStart:
+				if !answerStreamStarted {
+					answerStreamStarted = true
+					suppressAssistantMessage = true
+					streamingMessageID = streamEvent.MessageID
+					if err = writeStreamEvent(writer, Event{
+						Type:      "TEXT_MESSAGE_START",
+						ThreadID:  streamEvent.SessionID,
+						RunID:     streamEvent.RunID,
+						MessageID: streamEvent.MessageID,
+						Role:      "assistant",
+					}); err != nil {
+						return err
+					}
+				}
+			case agent.AnswerStreamEventDelta:
+				if answerStreamStarted && streamEvent.MessageID == streamingMessageID {
+					if err = writeStreamEvent(writer, Event{
+						Type:      "TEXT_MESSAGE_CONTENT",
+						ThreadID:  streamEvent.SessionID,
+						RunID:     streamEvent.RunID,
+						MessageID: streamEvent.MessageID,
+						Delta:     streamEvent.Delta,
+					}); err != nil {
+						return err
+					}
+				}
+			case agent.AnswerStreamEventCompleted:
+				if answerStreamStarted && !answerStreamEnded && streamEvent.MessageID == streamingMessageID {
+					answerStreamEnded = true
+					if err = writeStreamEvent(writer, Event{
+						Type:      "TEXT_MESSAGE_END",
+						ThreadID:  streamEvent.SessionID,
+						RunID:     streamEvent.RunID,
+						MessageID: streamEvent.MessageID,
+					}); err != nil {
+						return err
+					}
+				}
+			case agent.AnswerStreamEventFailed:
+				// ignore for now
+			}
 		case item, ok := <-outcomeCh:
 			if !ok {
 				outcomeCh = nil
@@ -127,10 +205,20 @@ func (s Service) StreamChat(ctx context.Context, req ChatRequest, writer *SSEWri
 			finalOutcome = &current
 			outcomeCh = nil
 		}
+
+		if shouldFlushPendingTerminal(pendingTerminalEvents, answerStreamEnded, observer.answerStream == nil) {
+			for _, item := range pendingTerminalEvents {
+				if err = writeStreamEvent(writer, item); err != nil {
+					return err
+				}
+			}
+			pendingTerminalEvents = nil
+		}
 	}
+	deferOnExit = false
 
 	if finalOutcome != nil && finalOutcome.err != nil && !sawTerminal {
-		return writer.Write(Event{
+		return writeStreamEvent(writer, Event{
 			Type:     "RUN_ERROR",
 			ThreadID: streamThreadID,
 			RunID:    streamRunID,
@@ -138,7 +226,7 @@ func (s Service) StreamChat(ctx context.Context, req ChatRequest, writer *SSEWri
 		})
 	}
 	if finalOutcome != nil && finalOutcome.err == nil && !sawTerminal && finalOutcome.response.Run.ID != "" {
-		return writer.Write(Event{
+		return writeStreamEvent(writer, Event{
 			Type:     "RUN_FINISHED",
 			ThreadID: finalOutcome.response.Run.SessionID,
 			RunID:    finalOutcome.response.Run.ID,
@@ -146,6 +234,50 @@ func (s Service) StreamChat(ctx context.Context, req ChatRequest, writer *SSEWri
 	}
 
 	return nil
+}
+
+func writeStreamEvent(writer *SSEWriter, event Event) error {
+	if err := writer.Write(event); err != nil {
+		return fmt.Errorf("%w: %w", ErrStreamUnwritable, err)
+	}
+	return nil
+}
+
+func shouldSuppressAssistantMessage(event harnessruntime.Event, suppress bool) bool {
+	return suppress && event.Type == "assistant.message"
+}
+
+func shouldDeferTerminalEvent(event harnessruntime.Event, answerStreamStarted, answerStreamEnded bool) bool {
+	if !answerStreamStarted || answerStreamEnded {
+		return false
+	}
+	return event.Type == "run.completed" || event.Type == "run.failed"
+}
+
+func shouldFlushPendingTerminal(events []Event, answerStreamEnded, answerStreamClosed bool) bool {
+	if len(events) == 0 {
+		return false
+	}
+	return answerStreamEnded || answerStreamClosed
+}
+
+func drainRunCompletion(events <-chan harnessruntime.Event, answerStream <-chan agent.AnswerStreamEvent, outcomes <-chan runOutcome) {
+	for events != nil || answerStream != nil || outcomes != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case _, ok := <-answerStream:
+			if !ok {
+				answerStream = nil
+			}
+		case _, ok := <-outcomes:
+			if !ok {
+				outcomes = nil
+			}
+		}
+	}
 }
 
 func (s Service) initialSnapshots(runID, sessionID string) ([]Event, error) {
@@ -212,15 +344,21 @@ type runOutcome struct {
 }
 
 type channelObserver struct {
-	events chan harnessruntime.Event
+	events       chan harnessruntime.Event
+	answerStream chan agent.AnswerStreamEvent
 }
 
 func newChannelObserver() *channelObserver {
 	return &channelObserver{
-		events: make(chan harnessruntime.Event, 128),
+		events:       make(chan harnessruntime.Event, 128),
+		answerStream: make(chan agent.AnswerStreamEvent, 128),
 	}
 }
 
 func (o *channelObserver) OnRuntimeEvent(event harnessruntime.Event) {
 	o.events <- event
+}
+
+func (o *channelObserver) OnAnswerStreamEvent(event agent.AnswerStreamEvent) {
+	o.answerStream <- event
 }

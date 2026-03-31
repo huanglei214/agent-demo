@@ -22,6 +22,25 @@ type Model interface {
 	Generate(ctx context.Context, req Request) (Response, error)
 }
 
+type StreamSink interface {
+	Start() error
+	Delta(text string) error
+	Complete() error
+	Fail(err error) error
+}
+
+type StreamingModel interface {
+	GenerateStream(ctx context.Context, req Request, sink StreamSink) error
+}
+
+type NonFinalStreamResponseError struct {
+	Response Response
+}
+
+func (e *NonFinalStreamResponseError) Error() string {
+	return "stream response is non-final"
+}
+
 type Factory func() (Model, error)
 
 type ToolCall struct {
