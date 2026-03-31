@@ -236,6 +236,94 @@ func TestBuildFollowUpPromptIncludesWorkingEvidence(t *testing.T) {
 	}
 }
 
+func TestBuildFollowUpPromptOmitsWorkingEvidenceWhenItOnlyRepeatsCurrentBatch(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder()
+	task := harnessruntime.Task{ID: "task_1", Instruction: "summarize README"}
+
+	prompt := builder.BuildFollowUpPrompt(harnessruntime.RunRoleLead, task, []harnessruntime.ToolCallResult{{
+		ToolCallID: "toolcall_1",
+		Tool:       "fs.read_file",
+		Input:      map[string]any{"path": "README.md"},
+		Result:     map[string]any{"path": "README.md"},
+	}}, map[string]any{
+		"fs.read_file": []map[string]any{{
+			"tool_call_id": "toolcall_1",
+			"result":       map[string]any{"path": "README.md"},
+		}},
+	}, nil, nil)
+
+	if !strings.Contains(prompt.Input, "New tool results:") {
+		t.Fatalf("expected prompt to keep current tool results, got:\n%s", prompt.Input)
+	}
+	if strings.Contains(prompt.Input, "Working evidence:") {
+		t.Fatalf("expected duplicated working evidence block to be omitted, got:\n%s", prompt.Input)
+	}
+}
+
+func TestBuildFollowUpPromptKeepsOnlyHistoricalWorkingEvidence(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder()
+	task := harnessruntime.Task{ID: "task_1", Instruction: "summarize README"}
+
+	prompt := builder.BuildFollowUpPrompt(harnessruntime.RunRoleLead, task, []harnessruntime.ToolCallResult{{
+		ToolCallID: "toolcall_current",
+		Tool:       "fs.read_file",
+		Input:      map[string]any{"path": "README.md"},
+		Result:     map[string]any{"path": "README.md"},
+	}}, map[string]any{
+		"fs.read_file": []map[string]any{{
+			"tool_call_id": "toolcall_current",
+			"result":       map[string]any{"path": "README.md"},
+		}},
+		"bash.exec": []map[string]any{{
+			"tool_call_id": "toolcall_old",
+			"result":       map[string]any{"command": "go test ./...", "exit_code": 0},
+		}},
+	}, nil, nil)
+
+	if !strings.Contains(prompt.Input, "Working evidence:") {
+		t.Fatalf("expected historical evidence to remain, got:\n%s", prompt.Input)
+	}
+
+	parts := strings.SplitN(prompt.Input, "Working evidence:\n", 2)
+	if len(parts) != 2 {
+		t.Fatalf("expected working evidence section, got:\n%s", prompt.Input)
+	}
+	workingSection := parts[1]
+	if strings.Contains(workingSection, "toolcall_current") {
+		t.Fatalf("expected current batch to be removed from working evidence, got:\n%s", workingSection)
+	}
+	if !strings.Contains(workingSection, "toolcall_old") {
+		t.Fatalf("expected historical evidence to remain, got:\n%s", workingSection)
+	}
+}
+
+func TestBuildFollowUpPromptPreservesMalformedWorkingEvidence(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder()
+	task := harnessruntime.Task{ID: "task_1", Instruction: "summarize README"}
+
+	prompt := builder.BuildFollowUpPrompt(harnessruntime.RunRoleLead, task, []harnessruntime.ToolCallResult{{
+		ToolCallID: "toolcall_1",
+		Tool:       "fs.read_file",
+		Input:      map[string]any{"path": "README.md"},
+		Result:     map[string]any{"path": "README.md"},
+	}}, map[string]any{
+		"fs.read_file": "unexpected-shape",
+	}, nil, nil)
+
+	if !strings.Contains(prompt.Input, "Working evidence:") {
+		t.Fatalf("expected malformed evidence to be preserved instead of dropped, got:\n%s", prompt.Input)
+	}
+	if !strings.Contains(prompt.Input, "unexpected-shape") {
+		t.Fatalf("expected malformed evidence payload to survive unchanged, got:\n%s", prompt.Input)
+	}
+}
+
 func TestBuildFollowUpPromptSummarizesReadFileContent(t *testing.T) {
 	t.Parallel()
 
