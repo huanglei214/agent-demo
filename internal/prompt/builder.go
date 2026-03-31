@@ -37,9 +37,6 @@ func (b Builder) BuildRunPrompt(role harnessruntime.RunRole, task harnessruntime
 	sections = append(sections, renderToolingLayer(tools))
 
 	inputParts := b.runInputParts(role, task, modelContext)
-	if currentStep != nil {
-		inputParts = append(inputParts, fmt.Sprintf("Current step:\n- id=%s\n- title=%s\n- status=%s", currentStep.ID, currentStep.Title, currentStep.Status))
-	}
 
 	return Prompt{
 		System: strings.Join(sections, "\n\n"),
@@ -84,11 +81,11 @@ func (b Builder) BuildFollowUpPrompt(role harnessruntime.RunRole, task harnessru
 		System: systemPrompt,
 		Input:  strings.Join(inputParts, "\n\n"),
 		Metadata: map[string]any{
-			"task_id":       task.ID,
-			"role":          string(normalizeRole(role)),
-			"layers":        promptLayers(activeSkill != nil),
-			"skill":         activeSkillName(activeSkill),
-			"tool_count":    len(tools),
+			"task_id":        task.ID,
+			"role":           string(normalizeRole(role)),
+			"layers":         promptLayers(activeSkill != nil),
+			"skill":          activeSkillName(activeSkill),
+			"tool_count":     len(tools),
 			"new_tool_count": len(toolResults),
 		},
 	}
@@ -122,12 +119,12 @@ func (b Builder) BuildForcedFinalPrompt(role harnessruntime.RunRole, task harnes
 		System: systemPrompt,
 		Input:  strings.Join(inputParts, "\n\n"),
 		Metadata: map[string]any{
-			"task_id":       task.ID,
-			"role":          string(normalizeRole(role)),
-			"layers":        promptLayers(activeSkill != nil),
-			"skill":         activeSkillName(activeSkill),
-			"tool_count":    len(tools),
-			"forced_final":  true,
+			"task_id":      task.ID,
+			"role":         string(normalizeRole(role)),
+			"layers":       promptLayers(activeSkill != nil),
+			"skill":        activeSkillName(activeSkill),
+			"tool_count":   len(tools),
+			"forced_final": true,
 		},
 	}
 }

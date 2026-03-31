@@ -1705,7 +1705,7 @@ func (m *streamingRunModel) GenerateStream(ctx context.Context, req model.Reques
 }
 
 type captureStreamingRunObserver struct {
-	events      []harnessruntime.Event
+	events       []harnessruntime.Event
 	answerEvents []agent.AnswerStreamEvent
 }
 

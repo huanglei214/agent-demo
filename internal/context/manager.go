@@ -75,11 +75,6 @@ func (m Manager) Build(input BuildInput) ModelContext {
 			Title:   "Goal",
 			Content: input.Task.Instruction,
 		},
-		{
-			Kind:    "workspace",
-			Title:   "Workspace",
-			Content: input.Task.Workspace,
-		},
 	}
 
 	planItems := []Item{
@@ -239,7 +234,6 @@ func (m ModelContext) Render() string {
 		{title: "Plan Context", items: m.Plan},
 		{title: "Recalled Memories", items: m.Memories},
 		{title: "Summaries", items: m.Summaries},
-		{title: "Recent Events", items: m.Recent},
 	}
 
 	var builder strings.Builder

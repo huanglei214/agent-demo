@@ -56,7 +56,6 @@ func TestBuildOrdersContextSections(t *testing.T) {
 		"Plan Context:",
 		"Recalled Memories:",
 		"Summaries:",
-		"Recent Events:",
 	} {
 		if !strings.Contains(rendered, expected) {
 			t.Fatalf("expected rendered context to contain %q, got:\n%s", expected, rendered)
